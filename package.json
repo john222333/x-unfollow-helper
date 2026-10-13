@@ -1,0 +1,15 @@
+{
+  "name": "x-assistant",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Chrome 插件：在 x.com 上分批取关，给推文的 AI 味和算法友好度打分",
+  "license": "MIT",
+  "scripts": {
+    "test": "node --test tests/unit.test.js",
+    "test:e2e": "node tests/e2e/run.js",
+    "zip": "zip -r x-assistant.zip manifest.json icons src README.md LICENSE"
+  },
+  "devDependencies": {
+    "playwright": "^1.56.1"
+  }
+}

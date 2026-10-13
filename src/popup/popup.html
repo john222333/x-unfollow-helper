@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>X 助手</title>
+  <style>
+    :root { --bg:#fff; --fg:#0f1419; --muted:#536471; --line:#e6ecf0; --soft:#f2f5f7; --bad:#e0245e; }
+    @media (prefers-color-scheme: dark) { :root { --bg:#15181c; --fg:#e7e9ea; --muted:#8b98a5; --line:#2f3336; --soft:#202327; } }
+    body { margin:0; width:300px; background:var(--bg); color:var(--fg); font:14px/1.5 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif; }
+    .wrap { padding:14px 16px; }
+    h1 { font-size:16px; margin:0 0 2px; }
+    .muted { color:var(--muted); font-size:12px; }
+    .grid { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin:12px 0; }
+    .grid div { background:var(--soft); border-radius:10px; padding:8px 10px; }
+    .k { font-size:12px; color:var(--muted); } .v { font-size:18px; font-weight:700; }
+    .err { color:var(--bad); font-size:12px; margin-bottom:8px; }
+    .row { display:flex; gap:6px; flex-wrap:wrap; }
+    button { border:1px solid var(--line); background:var(--bg); color:var(--fg); border-radius:999px; padding:6px 12px; font:inherit; cursor:pointer; }
+    button.primary { background:var(--fg); color:var(--bg); border-color:var(--fg); }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>X 助手</h1>
+    <div class="muted" id="me"></div>
+    <div class="grid">
+      <div><div class="k">取关状态</div><div class="v" id="status">—</div></div>
+      <div><div class="k">今天</div><div class="v" id="today">—</div></div>
+      <div><div class="k">队列</div><div class="v" id="queue">—</div></div>
+      <div><div class="k">关注列表</div><div class="v" id="users">—</div></div>
+    </div>
+    <div class="err" id="err" hidden></div>
+    <div class="row" id="actions"></div>
+    <p class="muted">在 x.com 发推框和推文下方点「体检」，可以检查 AI 味和算法友好度。</p>
+  </div>
+  <script src="../lib/store.js"></script>
+  <script src="../lib/panel.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

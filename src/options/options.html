@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>X 助手 · 管理页</title>
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand">X 助手 <span class="ver" id="ver"></span></div>
+    <div class="me" id="me">未检测到账号</div>
+    <div class="pill" id="statusPill">空闲</div>
+  </header>
+
+  <nav class="tabs" id="tabs">
+    <button data-tab="users" class="on">关注管理</button>
+    <button data-tab="job">取关任务</button>
+    <button data-tab="check">推文体检</button>
+    <button data-tab="log">日志</button>
+    <button data-tab="settings">设置</button>
+  </nav>
+
+  <main>
+    <!-- 关注管理 -->
+    <section id="tab-users" class="tab on">
+      <div class="card">
+        <div class="row">
+          <button class="btn primary" id="collectBtn">读取关注列表</button>
+          <button class="btn" id="stopCollectBtn" hidden>停止读取</button>
+          <span class="muted" id="collectMsg"></span>
+        </div>
+        <p class="muted small">会打开一个小窗口，自动慢速滚动你的「正在关注」页面。读取期间请不要关闭那个窗口，也不要最小化它。</p>
+      </div>
+
+      <div class="card">
+        <div class="filters">
+          <input type="search" id="q" placeholder="搜索名字、用户名或简介">
+          <div class="tagfilters" id="tagFilters"></div>
+          <label>粉丝少于 <input type="number" id="fewN" value="50" min="0" style="width:72px"></label>
+          <label>简介含关键词 <input type="text" id="kw" placeholder="逗号分隔" style="width:160px"></label>
+          <label><input type="checkbox" id="hideWl" checked> 隐藏白名单</label>
+          <label>排序
+            <select id="sort">
+              <option value="order">读取顺序</option>
+              <option value="followersAsc">粉丝数从少到多</option>
+              <option value="followersDesc">粉丝数从多到少</option>
+              <option value="tweetsAsc">推文数从少到多</option>
+            </select>
+          </label>
+        </div>
+        <div class="row bar">
+          <span id="userSummary" class="muted"></span>
+          <span class="spacer"></span>
+          <button class="btn" id="selAll">全选筛选结果</button>
+          <button class="btn" id="selNone">清空选择</button>
+          <button class="btn" id="wlAdd">加入白名单</button>
+          <button class="btn" id="wlRemove">移出白名单</button>
+          <button class="btn primary" id="enqueueBtn">加入取关队列</button>
+        </div>
+        <table class="grid">
+          <thead><tr><th style="width:28px"><input type="checkbox" id="pageAll"></th><th>账号</th><th class="n">粉丝</th><th class="n">关注</th><th class="n">推文</th><th>标签</th><th style="width:64px;white-space:nowrap">白名单</th></tr></thead>
+          <tbody id="userRows"></tbody>
+        </table>
+        <div class="row pager"><button class="btn" id="prevPage">上一页</button><span id="pageInfo" class="muted"></span><button class="btn" id="nextPage">下一页</button></div>
+      </div>
+    </section>
+
+    <!-- 取关任务 -->
+    <section id="tab-job" class="tab">
+      <div class="card">
+        <div id="dryBanner" class="banner" hidden>演练模式已开启：会打开主页、找到按钮，但不会真的点击取关。可在「设置」里关闭。</div>
+        <div class="stats">
+          <div><div class="k">状态</div><div class="v" id="jobStatus">空闲</div></div>
+          <div><div class="k">今天已取关</div><div class="v" id="jobToday">0 / 100</div></div>
+          <div><div class="k">队列中</div><div class="v" id="jobQueue">0</div></div>
+          <div><div class="k">下一步</div><div class="v" id="jobNext">—</div></div>
+        </div>
+        <div id="jobError" class="banner err" hidden></div>
+        <div class="row" id="jobButtons"></div>
+        <p class="muted small" id="paceSummary"></p>
+      </div>
+      <div class="card">
+        <h3>当前批次</h3>
+        <div id="batchList" class="muted">没有进行中的批次</div>
+      </div>
+      <div class="card">
+        <div class="row"><h3 style="margin:0">队列</h3><span class="spacer"></span><button class="btn" id="clearQueue">清空队列</button></div>
+        <table class="grid"><thead><tr><th>#</th><th>账号</th><th>动作</th><th></th></tr></thead><tbody id="queueRows"></tbody></table>
+        <div class="muted small" id="queueMore"></div>
+      </div>
+    </section>
+
+    <!-- 推文体检 -->
+    <section id="tab-check" class="tab">
+      <div class="card">
+        <textarea id="checkText" rows="6" placeholder="把推文粘贴到这里"></textarea>
+        <div class="row"><button class="btn primary" id="checkBtn">体检</button><span class="muted small" id="checkCount"></span></div>
+      </div>
+      <div id="checkOut"></div>
+    </section>
+
+    <!-- 日志 -->
+    <section id="tab-log" class="tab">
+      <div class="card">
+        <div class="row bar">
+          <select id="logFilter"><option value="all">全部</option><option value="ok">成功</option><option value="fail">失败或跳过</option></select>
+          <span id="logSummary" class="muted"></span>
+          <span class="spacer"></span>
+          <button class="btn" id="refollowBtn">重新关注所选</button>
+          <button class="btn" id="exportCsv">导出 CSV</button>
+          <button class="btn" id="clearLog">清空日志</button>
+        </div>
+        <table class="grid"><thead><tr><th style="width:28px"><input type="checkbox" id="logAll"></th><th>时间</th><th>账号</th><th>动作</th><th>结果</th><th class="n">批次</th></tr></thead><tbody id="logRows"></tbody></table>
+      </div>
+    </section>
+
+    <!-- 设置 -->
+    <section id="tab-settings" class="tab">
+      <div class="card">
+        <h3>取关节奏</h3>
+        <div class="form">
+          <label>每次取关间隔（秒） <span><input type="number" id="minDelaySec"> 到 <input type="number" id="maxDelaySec"></span><em>最低 5 秒</em></label>
+          <label>每批人数 <span><input type="number" id="batchSize"></span><em>5 到 30</em></label>
+          <label>批次间休息（分钟） <span><input type="number" id="restMinMin"> 到 <input type="number" id="restMaxMin"></span><em>最低 10 分钟</em></label>
+          <label>每天上限 <span><input type="number" id="dailyCap"></span><em>最高 200，建议不超过 100</em></label>
+          <label class="check"><input type="checkbox" id="newAccountMode"> 新号或刚解除限制的账号（每天最多 30 个）</label>
+          <label class="check"><input type="checkbox" id="confirmEachBatch"> 每一批开始前都需要我确认</label>
+          <label class="check"><input type="checkbox" id="dryRun"> 演练模式（只打开主页、找按钮，不真的点击）</label>
+        </div>
+      </div>
+      <div class="card">
+        <h3>LLM（推文体检用）</h3>
+        <div class="form">
+          <label>服务商
+            <span><select id="provider">
+              <option value="anthropic">Anthropic（Claude）</option>
+              <option value="openai">OpenAI 兼容接口</option>
+            </select>
+            <select id="preset"><option value="">常用预设…</option></select></span>
+          </label>
+          <label>接口地址 <span><input type="url" id="baseUrl" style="width:320px"></span></label>
+          <label>模型 <span><input type="text" id="model" style="width:240px"></span></label>
+          <label id="effortRow">思考强度 <span><select id="effort"><option value="low">low（快、便宜）</option><option value="medium">medium</option><option value="high">high</option><option value="">不设置</option></select></span></label>
+          <label>API Key <span><input type="password" id="apiKey" style="width:320px" autocomplete="off"></span><em>只保存在本机浏览器里</em></label>
+        </div>
+        <div class="row"><button class="btn" id="pingBtn">测试连接</button><span class="muted small" id="pingMsg"></span></div>
+      </div>
+      <div class="card">
+        <h3>页面按钮</h3>
+        <div class="form">
+          <label class="check"><input type="checkbox" id="composeButton"> 在发推框加「体检」按钮</label>
+          <label class="check"><input type="checkbox" id="tweetButtons"> 在每条推文下加「体检」按钮</label>
+        </div>
+      </div>
+      <div class="row"><button class="btn primary" id="saveBtn">保存设置</button><span class="muted small" id="saveMsg"></span></div>
+      <div class="card">
+        <h3>数据</h3>
+        <div class="row">
+          <button class="btn" id="exportAll">导出全部数据（JSON）</button>
+          <button class="btn" id="clearUsers">清空关注列表缓存</button>
+          <button class="btn" id="clearCache">清空体检缓存</button>
+        </div>
+        <p class="muted small">所有数据只保存在这台电脑的浏览器里。插件不读取你的密码或 cookie，只有你主动体检的推文文本会发送给你配置的 LLM 服务。</p>
+        <p class="muted small">本插件不是 X 官方产品。自动取关不符合 X 的自动化规则，即使按默认节奏也有被限制的风险，请自行承担。</p>
+      </div>
+    </section>
+  </main>
+
+  <script src="../lib/store.js"></script>
+  <script src="../lib/rules.js"></script>
+  <script src="../lib/algo.js"></script>
+  <script src="../lib/panel.js"></script>
+  <script src="options.js"></script>
+</body>
+</html>
