@@ -10,6 +10,7 @@
   <header class="top">
     <div class="brand">X 助手 <span class="ver" id="ver"></span></div>
     <div class="me" id="me">未检测到账号</div>
+    <div class="pill" id="execPill" title="取关在后台进行，不会弹出窗口">后台运行</div>
     <div class="pill" id="statusPill">空闲</div>
   </header>
 
@@ -24,13 +25,22 @@
   <main>
     <!-- 关注管理 -->
     <section id="tab-users" class="tab on">
+      <div class="banner err" id="acctWarn" hidden></div>
+      <div class="card onboard" id="onboard" hidden>
+        <h3>三步开始整理关注</h3>
+        <ol>
+          <li><b>读取关注列表</b>：在 Chrome 里登录 x.com，然后点下面的按钮。插件在后台读取，不会弹出窗口。</li>
+          <li><b>筛选要取关的人</b>：用「不回关」「疑似机器人」「零推文」等标签和搜索框筛选；想保留的人点 ☆ 加入白名单，永远不会被取关。</li>
+          <li><b>加入队列</b>：之后插件按安全节奏在后台自动执行，每天有上限，遇到 X 的限制会自动停下。取错了可以在「日志」里一键重新关注。</li>
+        </ol>
+      </div>
       <div class="card">
         <div class="row">
           <button class="btn primary" id="collectBtn">读取关注列表</button>
           <button class="btn" id="stopCollectBtn" hidden>停止读取</button>
           <span class="muted" id="collectMsg"></span>
         </div>
-        <p class="muted small">会打开一个小窗口，自动慢速滚动你的「正在关注」页面。读取期间请不要关闭那个窗口，也不要最小化它。</p>
+        <p class="muted small">在后台读取，不会弹出窗口。你开着 x.com 时插件借用那个页面；没开时会在标签栏最左边放一个固定的小标签页，用完自动关掉。被 X 限制读取频率时会自动等待后接着读。</p>
       </div>
 
       <div class="card">
@@ -42,7 +52,8 @@
           <label><input type="checkbox" id="hideWl" checked> 隐藏白名单</label>
           <label>排序
             <select id="sort">
-              <option value="order">读取顺序</option>
+              <option value="order">最近关注的在前</option>
+              <option value="orderRev">最早关注的在前</option>
               <option value="followersAsc">粉丝数从少到多</option>
               <option value="followersDesc">粉丝数从多到少</option>
               <option value="tweetsAsc">推文数从少到多</option>
@@ -56,6 +67,7 @@
           <button class="btn" id="selNone">清空选择</button>
           <button class="btn" id="wlAdd">加入白名单</button>
           <button class="btn" id="wlRemove">移出白名单</button>
+          <button class="btn" id="exportUsers" title="取关前留一份备份">导出 CSV</button>
           <button class="btn primary" id="enqueueBtn">加入取关队列</button>
         </div>
         <table class="grid">
@@ -69,15 +81,18 @@
     <!-- 取关任务 -->
     <section id="tab-job" class="tab">
       <div class="card">
-        <div id="dryBanner" class="banner" hidden>演练模式已开启：会打开主页、找到按钮，但不会真的点击取关。可在「设置」里关闭。</div>
+        <div id="dryBanner" class="banner" hidden>演练模式已开启：只检查登录状态和执行通道是否正常，不会真的取关，队列保持不变。可在「设置」里关闭。</div>
         <div class="stats">
           <div><div class="k">状态</div><div class="v" id="jobStatus">空闲</div></div>
-          <div><div class="k">今天已取关</div><div class="v" id="jobToday">0 / 100</div></div>
+          <div><div class="k" title="取关和重新关注都算">今天已处理</div><div class="v" id="jobToday">0 / 100</div></div>
           <div><div class="k">队列中</div><div class="v" id="jobQueue">0</div></div>
           <div><div class="k">下一步</div><div class="v" id="jobNext">—</div></div>
         </div>
+        <div class="banner err" id="acctWarnJob" hidden></div>
         <div id="jobError" class="banner err" hidden></div>
         <div class="row" id="jobButtons"></div>
+        <p class="small" id="etaLine"></p>
+        <p class="muted small" id="execLine"></p>
         <p class="muted small" id="paceSummary"></p>
       </div>
       <div class="card">
@@ -127,7 +142,13 @@
           <label class="check"><input type="checkbox" id="newAccountMode"> 新号或刚解除限制的账号（每天最多 30 个）</label>
           <label class="check"><input type="checkbox" id="autoStart"> 加入队列后自动开始取关（不用再点「开始」）</label>
           <label class="check"><input type="checkbox" id="confirmEachBatch"> 每一批开始前都需要我确认（默认关闭，批次之间会自动接着执行）</label>
-          <label class="check"><input type="checkbox" id="dryRun"> 演练模式（只打开主页、找按钮，不真的点击）</label>
+          <label class="check"><input type="checkbox" id="dryRun"> 演练模式（只检查登录状态和执行通道是否正常，不真的取关）</label>
+          <label>执行方式
+            <span><select id="execMode">
+              <option value="auto">后台接口（推荐）：不打开页面，不可用时自动改为后台标签页</option>
+              <option value="ui">后台标签页：在固定的小标签页里打开主页点按钮，较慢</option>
+            </select></span>
+          </label>
         </div>
       </div>
       <div class="card">
@@ -162,7 +183,7 @@
           <button class="btn" id="clearUsers">清空关注列表缓存</button>
           <button class="btn" id="clearCache">清空体检缓存</button>
         </div>
-        <p class="muted small">所有数据只保存在这台电脑的浏览器里。插件不读取你的密码或 cookie，只有你主动体检的推文文本会发送给你配置的 LLM 服务。</p>
+        <p class="muted small">所有数据只保存在这台电脑的浏览器里。取关和读取列表是在 x.com 页面里调用 X 网页版自己的接口，用的是浏览器已有的登录状态（和你在页面上点按钮发出的请求一样），登录信息不会被保存或发送到别处。只有你主动体检的推文文本会发送给你配置的 LLM 服务。</p>
         <p class="muted small">本插件不是 X 官方产品。自动取关不符合 X 的自动化规则，即使按默认节奏也有被限制的风险，请自行承担。</p>
       </div>
     </section>

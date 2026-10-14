@@ -12,7 +12,16 @@
   async function render() {
     const st = await send({ type: 'xa:state' });
     const { users } = await chrome.storage.local.get('users');
-    $('me').textContent = st.me && st.me.handle ? `@${st.me.handle}` : '还没识别到账号，打开 x.com 即可';
+    const who = st.me && st.me.handle ? `@${st.me.handle}` : '还没识别到账号，打开 x.com 即可';
+    const via = st.exec && (st.exec.mode === 'ui' || st.exec.apiBroken) ? '后台标签页模式' : '后台运行，不弹窗口';
+    $('me').textContent = `${who} · ${via}`;
+    const e = st.eta;
+    const live = ['running', 'daily_cap', 'awaiting_confirm'].includes(st.job.status) && !st.dryRun;
+    $('eta').textContent = live && e
+      ? (e.days === 0
+        ? `预计今天 ${new Date(e.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} 左右处理完`
+        : `预计还要 ${e.days} 天处理完（每天最多 ${st.cap} 个）`)
+      : '';
     $('status').textContent = STATUS[st.job.status] || st.job.status;
     $('today').textContent = `${st.job.doneToday} / ${st.cap}`;
     $('queue').textContent = st.queueLength;
@@ -22,7 +31,7 @@
     const btns = ['<button class="primary" data-go="users">打开管理页</button>'];
     if (st.job.status === 'running' || st.job.status === 'awaiting_confirm') btns.push('<button data-do="pause">暂停取关</button>');
     if (st.job.status === 'awaiting_confirm') btns.push('<button data-go="job">去确认下一批</button>');
-    if (st.job.status === 'paused' && st.queueLength) btns.push('<button data-do="start">继续取关</button>');
+    if (['paused', 'idle'].includes(st.job.status) && st.queueLength) btns.push(`<button data-do="start">${st.job.status === 'paused' ? '继续取关' : '开始取关'}</button>`);
     btns.push('<button data-go="check">粘贴体检</button>');
     $('actions').innerHTML = btns.join('');
   }

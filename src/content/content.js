@@ -1,11 +1,73 @@
-// x.com 内容脚本：响应后台指令（读取关注列表、取关），在发推框和推文上加「体检」按钮。
+// x.com 内容脚本：替后台在已登录的页面里调用 X 接口、读取关注列表，在发推框和推文上加「体检」按钮。
 (function () {
   'use strict';
-  if (window.__xaContentLoaded) return;
-  window.__xaContentLoaded = true;
+  // 插件更新后会把脚本重新注入到已打开的页面。旧脚本这时已经失效，由新脚本接管。
+  const runtime = chrome.runtime;
+  const alive = () => { try { return !!(runtime && runtime.id); } catch { return false; } };
+  if (window.__xaContent && window.__xaContent.alive()) return;
+  if (window.__xaContent) { try { window.__xaContent.retire(); } catch { /* 忽略 */ } }
+  const INST = Math.random().toString(36).slice(2, 10);
+  let observer = null;
+  window.__xaContent = {
+    alive,
+    retire: () => { if (observer) observer.disconnect(); },
+  };
 
   const D = window.XADom;
+  const XAPI = window.XAPI;
   const send = (msg) => window.XAPanel.send(msg);
+
+  // ---------- 在页面里调用 X 接口 ----------
+  // 从这个页面发出的请求和网页版自己的请求一样：同源、自动带上登录 cookie。
+  function cookie(name) {
+    const m = new RegExp(`(?:^|;\\s*)${name}=([^;]*)`).exec(document.cookie);
+    return m ? decodeURIComponent(m[1]) : null;
+  }
+
+  async function apiFetch(req) {
+    const csrf = cookie('ct0');
+    if (!csrf) return { status: 0, error: 'no_csrf' };
+    const url = new URL(req.path, location.origin);
+    for (const [k, v] of Object.entries(req.query || {})) url.searchParams.set(k, v);
+    const headers = {
+      authorization: `Bearer ${req.bearer || XAPI.WEB_BEARER}`,
+      'x-csrf-token': csrf,
+      'x-twitter-auth-type': 'OAuth2Session',
+      'x-twitter-active-user': 'yes',
+      'x-twitter-client-language': (document.documentElement.lang || 'en').toLowerCase(),
+    };
+    let body;
+    if (req.form) {
+      headers['content-type'] = 'application/x-www-form-urlencoded';
+      body = new URLSearchParams(req.form).toString();
+    }
+    try {
+      const res = await fetch(url.toString(), { method: req.method || 'GET', headers, body, credentials: 'include' });
+      const text = await res.text();
+      let json = null;
+      try { json = JSON.parse(text); } catch { /* 不是 JSON */ }
+      return {
+        status: res.status,
+        json,
+        text: json ? undefined : text.slice(0, 300),
+        rate: { remaining: res.headers.get('x-rate-limit-remaining'), reset: res.headers.get('x-rate-limit-reset') },
+      };
+    } catch (e) {
+      return { status: 0, error: `network: ${e.message}` };
+    }
+  }
+
+  function pageInfo() {
+    const twid = cookie('twid') || '';
+    const m = /u=(\d+)/.exec(twid);
+    return {
+      handle: D.currentHandle(),
+      loggedOut: D.loggedOut(),
+      userId: m ? m[1] : null,
+      scripts: Array.from(document.scripts).map((x) => x.src).filter((src) => /\/client-web\/main\.[\w-]+\.js/.test(src)),
+      visible: document.visibilityState,
+    };
+  }
 
   // ---------- 旁听到的关注列表数据 ----------
   const gqlUsers = [];
@@ -17,6 +79,7 @@
       gqlUsers.push(...D.parseGraphQLUsers(ev.data.data));
       if (gqlUsers.length > 5000) gqlUsers.splice(0, gqlUsers.length - 5000);
     }
+    if (ev.data.op === 'meta' && alive()) send({ type: 'xa:xmeta', meta: ev.data.meta }).catch(() => {});
   });
   // 本脚本加载前页面可能已经收到了第一页，让页面脚本把缓存的数据再发一遍。
   window.postMessage({ source: 'xa-content', op: 'replay' }, window.location.origin);
@@ -117,6 +180,18 @@
   // ---------- 后台指令 ----------
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (!msg || !msg.type) return false;
+    if (msg.type === 'xa:ping-page') {
+      sendResponse({ ok: true, inst: INST, href: location.href });
+      return false;
+    }
+    if (msg.type === 'xa:pageInfo') {
+      sendResponse(pageInfo());
+      return false;
+    }
+    if (msg.type === 'xa:api') {
+      apiFetch(msg.req || {}).then(sendResponse);
+      return true;
+    }
     if (msg.type === 'xa:whoami') {
       D.whoami().then((r) => sendResponse(r), () => sendResponse({ handle: null }));
       return true;
@@ -137,7 +212,7 @@
     }
     if (msg.type === 'xa:act') {
       const verb = msg.action === 'follow' ? '重新关注' : '取关';
-      showBadge(`X 助手工作窗口：正在${msg.dryRun ? '演练' : ''}${verb} @${msg.handle}。关掉这个窗口会暂停任务`, false);
+      showBadge(`X 助手：正在${msg.dryRun ? '演练' : ''}${verb} @${msg.handle}`, false);
       D.act(msg).then(sendResponse, (e) => sendResponse({ result: 'error', detail: e.message }));
       return true;
     }
@@ -145,11 +220,9 @@
   });
 
   // ---------- 告诉后台当前登录的是谁 ----------
-  setTimeout(async () => {
-    const link = document.querySelector('a[data-testid="AppTabBar_Profile_Link"]');
-    if (!link) return;
-    const m = /^\/([A-Za-z0-9_]{1,15})\/?$/.exec(new URL(link.href, location.origin).pathname);
-    if (m) send({ type: 'xa:me', handle: m[1] }).catch(() => {});
+  setTimeout(() => {
+    const handle = D.currentHandle();
+    if (handle) send({ type: 'xa:me', handle }).catch(() => {});
   }, 3000);
 
   // ---------- 体检按钮 ----------
@@ -171,6 +244,7 @@
     const b = document.createElement('button');
     b.type = 'button';
     b.className = 'xa-check-btn';
+    b.dataset.xaInst = INST;
     b.textContent = '体检';
     b.title = title;
     b.style.cssText = 'border:1px solid rgba(29,155,240,.5);color:rgb(29,155,240);background:transparent;border-radius:999px;'
@@ -178,10 +252,35 @@
     return b;
   }
 
+  // 写推文时按钮上实时显示本地规则算出的 AI 味，不用点开就能看到。
+  function liveLabel(btn, text) {
+    const t = (text || '').trim();
+    if (!t) { btn.textContent = '体检'; btn.style.color = 'rgb(29,155,240)'; return; }
+    const score = window.XARules.analyze(t).score;
+    btn.textContent = `体检 · AI味 ${score}`;
+    btn.style.color = score >= 60 ? 'rgb(244,33,46)' : score >= 30 ? 'rgb(255,173,31)' : 'rgb(0,186,124)';
+  }
+  let liveTimer = null;
+  document.addEventListener('input', (e) => {
+    const ed = e.target && e.target.closest && e.target.closest('[data-testid^="tweetTextarea_"]');
+    if (!ed || !ui.composeButton) return;
+    clearTimeout(liveTimer);
+    liveTimer = setTimeout(() => {
+      let node = ed;
+      for (let i = 0; i < 14 && node; i++, node = node.parentElement) {
+        const btn = node.querySelector && node.querySelector(`[data-testid="toolBar"] .xa-check-btn[data-xa-inst="${INST}"]`);
+        if (btn) { liveLabel(btn, ed.innerText); return; }
+      }
+    }, 400);
+  }, true);
+
   function scan() {
+    if (!alive()) { if (observer) observer.disconnect(); return; }
+    // 旧版本脚本留下的按钮已经失效，换成新的。
+    document.querySelectorAll(`.xa-check-btn:not([data-xa-inst="${INST}"])`).forEach((b) => b.remove());
     if (ui.composeButton) {
-      document.querySelectorAll('[data-testid="toolBar"]:not([data-xa-done])').forEach((bar) => {
-        bar.setAttribute('data-xa-done', '1');
+      document.querySelectorAll(`[data-testid="toolBar"]:not([data-xa-done="${INST}"])`).forEach((bar) => {
+        bar.setAttribute('data-xa-done', INST);
         const btn = makeButton('检查这条推文的 AI 味和算法友好度');
         btn.addEventListener('click', (e) => {
           e.preventDefault();
@@ -196,10 +295,10 @@
       });
     }
     if (ui.tweetButtons) {
-      document.querySelectorAll('article[data-testid="tweet"]:not([data-xa-done])').forEach((article) => {
+      document.querySelectorAll(`article[data-testid="tweet"]:not([data-xa-done="${INST}"])`).forEach((article) => {
         const group = article.querySelector('[role="group"]');
         if (!group) return;
-        article.setAttribute('data-xa-done', '1');
+        article.setAttribute('data-xa-done', INST);
         if (!D.tweetText(article)) return;
         const btn = makeButton('检查这条推文的 AI 味');
         btn.addEventListener('click', (e) => {
@@ -213,9 +312,10 @@
   }
 
   let pending = false;
-  new MutationObserver(() => {
+  observer = new MutationObserver(() => {
     if (pending) return;
     pending = true;
     setTimeout(() => { pending = false; scan(); }, 600);
-  }).observe(document.documentElement, { childList: true, subtree: true });
+  });
+  observer.observe(document.documentElement, { childList: true, subtree: true });
 })();

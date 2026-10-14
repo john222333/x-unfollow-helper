@@ -216,57 +216,6 @@
       .filter(Boolean);
   }
 
-  function fromGraphQLUser(o) {
-    const L = o.legacy || {};
-    const C = o.core || {};
-    const R = o.relationship_perspectives || {};
-    const handle = C.screen_name || L.screen_name;
-    if (!handle) return null;
-    const avatar = (o.avatar && o.avatar.image_url) || L.profile_image_url_https;
-    const pick = (...vals) => vals.find((v) => v !== undefined && v !== null);
-    return {
-      id: String(o.rest_id),
-      handle,
-      name: pick(C.name, L.name),
-      bio: pick(o.profile_bio && o.profile_bio.description, L.description),
-      avatar,
-      defaultAvatar: pick(L.default_profile_image, avatar ? /default_profile/.test(avatar) : undefined),
-      followers: pick(L.followers_count),
-      following: pick(L.friends_count),
-      tweets: pick(L.statuses_count),
-      followsYou: pick(R.followed_by, L.followed_by),
-      youFollow: pick(R.following, L.following),
-      verified: !!(o.is_blue_verified || (o.verification && o.verification.verified) || L.verified) || undefined,
-      protected: pick(o.privacy && o.privacy.protected, L.protected),
-      createdAt: pick(C.created_at, L.created_at),
-      source: 'graphql',
-    };
-  }
-
-  // 递归找出响应里所有 User 对象，对接口结构的小改动不敏感。
-  function parseGraphQLUsers(data) {
-    const out = [];
-    const seen = new Set();
-    (function walk(o, depth) {
-      if (!o || typeof o !== 'object' || depth > 60) return;
-      if (Array.isArray(o)) {
-        for (const x of o) walk(x, depth + 1);
-        return;
-      }
-      // 带 timeline 的 User 是「你自己」这个外层容器，关注的人在它里面，要继续往下找。
-      if (o.__typename === 'User' && o.rest_id && !o.timeline) {
-        const u = fromGraphQLUser(o);
-        if (u && !seen.has(u.handle.toLowerCase())) {
-          seen.add(u.handle.toLowerCase());
-          out.push(u);
-        }
-        return;
-      }
-      for (const k of Object.keys(o)) walk(o[k], depth + 1);
-    })(data, 0);
-    return out;
-  }
-
   function nearBottom() {
     const el = document.scrollingElement || document.documentElement;
     return el.scrollTop + window.innerHeight >= el.scrollHeight - 300;
@@ -333,7 +282,7 @@
   }
 
   root.XADom = {
-    sleep, rand, waitFor, act, whoami, currentHandle, visibleUsers, parseGraphQLUsers, detectBlocker,
+    sleep, rand, waitFor, act, whoami, currentHandle, loggedOut, visibleUsers, parseGraphQLUsers: root.XAPI.parseGraphQLUsers, detectBlocker,
     nearBottom, loadingMore, loadError, tweetText, composeEditorFor, replaceEditorText, primaryColumn,
   };
 })(typeof globalThis !== 'undefined' ? globalThis : self);

@@ -74,3 +74,8 @@ table.grid { width: 100%; border-collapse: collapse; }
 .res-fail { color: var(--bad); }
 .res-skip { color: var(--muted); }
 #checkOut > div { background: var(--card); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+.pill.exec-ui { background: rgba(199,119,0,.15); color: var(--warn); }
+.pill.exec-warn { background: rgba(224,36,94,.12); color: var(--bad); }
+.onboard ol { margin: 0; padding-left: 20px; display: grid; gap: 6px; }
+#etaLine:empty, #execLine:empty { display: none; }
+#etaLine { margin: 10px 0 0; }

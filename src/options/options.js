@@ -7,8 +7,10 @@
   const $ = (id) => document.getElementById(id);
   const PAGE = 100;
 
-  const data = { users: {}, whitelist: {}, queue: [], job: null, collect: null, me: null, log: [], settings: S.mergeSettings() };
+  const data = { users: {}, whitelist: {}, queue: [], job: null, collect: null, me: null, owner: null, log: [], settings: S.mergeSettings() };
   let cap = 100;
+  let st = null; // 后台返回的整体状态（执行方式、预计完成时间等）
+  let account = null; // 当前 x.com 登录的账号（只看已经打开的页面）
   const selected = new Set();
   const logSelected = new Set();
   let page = 0;
@@ -53,13 +55,14 @@
 
   // ---------- 数据加载与监听 ----------
   async function loadAll() {
-    const got = await chrome.storage.local.get(['users', 'whitelist', 'queue', 'job', 'collect', 'me', 'log', 'settings']);
+    const got = await chrome.storage.local.get(['users', 'whitelist', 'queue', 'job', 'collect', 'me', 'owner', 'log', 'settings']);
     data.users = got.users || {};
     data.whitelist = got.whitelist || {};
     data.queue = got.queue || [];
     data.job = got.job || null;
     data.collect = got.collect || null;
     data.me = got.me || null;
+    data.owner = got.owner || null;
     data.log = got.log || [];
     data.settings = S.mergeSettings(got.settings);
     await refreshState();
@@ -67,7 +70,7 @@
 
   async function refreshState() {
     try {
-      const st = await send({ type: 'xa:state' });
+      st = await send({ type: 'xa:state' });
       data.job = st.job;
       cap = st.cap;
     } catch (e) {
@@ -75,31 +78,86 @@
     }
   }
 
+  const sameHandle = (c) => ((c.oldValue && c.oldValue.handle) || '') === ((c.newValue && c.newValue.handle) || '');
+
+  async function refreshAccount() {
+    try {
+      account = await send({ type: 'xa:account' });
+    } catch (e) {
+      account = null;
+    }
+    renderHeader();
+    renderAccountWarn();
+  }
+
+  // 存储变化很密集（读取列表时每页都会改几项），合并到一起再渲染。
+  // 要累积所有变过的项：只看最后一次变化会漏掉前面的（比如列表更新后紧跟着一次进度更新）。
   let renderTimer = null;
+  const pending = new Set();
   chrome.storage.onChanged.addListener(async (changes, area) => {
     if (area !== 'local') return;
     for (const [k, v] of Object.entries(changes)) {
       if (k in data) data[k] = k === 'settings' ? S.mergeSettings(v.newValue) : (v.newValue || (Array.isArray(data[k]) ? [] : k === 'users' || k === 'whitelist' ? {} : null));
+      pending.add(k);
     }
-    if (changes.job || changes.settings) await refreshState();
-    clearTimeout(renderTimer);
+    if (changes.job || changes.settings || changes.queue || changes.exec || changes.owner) await refreshState();
+    if ((changes.me && !sameHandle(changes.me)) || changes.owner) refreshAccount();
+    // 节流而不是防抖：变化一直不停时（比如读取列表中）也要定期刷新界面。
+    if (renderTimer) return;
     renderTimer = setTimeout(() => {
+      renderTimer = null;
+      const has = (...keys) => keys.some((k) => pending.has(k));
       renderHeader();
-      if (changes.users || changes.whitelist || changes.settings) renderUsers();
-      if (changes.collect) renderCollect();
-      if (changes.job || changes.queue || changes.settings) renderJob();
-      if (changes.log) renderLog();
+      if (has('users', 'whitelist', 'settings')) renderUsers();
+      if (has('collect')) renderCollect();
+      if (has('job', 'queue', 'settings', 'exec')) renderJob();
+      if (has('log')) renderLog();
+      pending.clear();
     }, 150);
   });
 
   // ---------- 顶部 ----------
   function renderHeader() {
     $('ver').textContent = `v${chrome.runtime.getManifest().version}`;
-    $('me').textContent = data.me && data.me.handle ? `@${data.me.handle}` : '未检测到账号（打开 x.com 后会自动识别）';
-    const st = (data.job && data.job.status) || 'idle';
+    const live = account && account.live;
+    const handle = (live && live.handle) || (data.me && data.me.handle);
+    $('me').textContent = live && live.loggedOut
+      ? 'x.com 没有登录'
+      : handle ? `@${handle}` : '未检测到账号（打开 x.com 后会自动识别）';
+    const status = (data.job && data.job.status) || 'idle';
     const pill = $('statusPill');
-    pill.textContent = `取关：${STATUS[st] || st}`;
-    pill.className = `pill ${st}`;
+    pill.textContent = `取关：${STATUS[status] || status}`;
+    pill.className = `pill ${status}`;
+    const ex = $('execPill');
+    const e = st && st.exec;
+    if (e && e.mode === 'ui') {
+      ex.textContent = '后台标签页模式';
+      ex.className = 'pill exec-ui';
+      ex.title = '在固定的小标签页里打开主页点按钮，可在「设置」里改回后台接口';
+    } else if (e && e.apiBroken) {
+      ex.textContent = '后台标签页模式（接口暂不可用）';
+      ex.className = 'pill exec-warn';
+      ex.title = `后台接口暂时用不了${e.apiError ? `（${e.apiError}）` : ''}，已自动改为在固定的小标签页里点按钮，${fmtTime(e.apiBrokenUntil)} 后自动再试接口`;
+    } else {
+      ex.textContent = '后台运行';
+      ex.className = 'pill';
+      ex.title = '取关在后台调用 X 网页版接口完成，不会弹出窗口';
+    }
+  }
+
+  // x.com 上登录的账号和关注列表的主人不一致时提前提醒，取关前也会再核对一次。
+  function renderAccountWarn() {
+    const live = account && account.live;
+    const owner = data.owner && data.owner.handle;
+    let text = '';
+    if (live && live.loggedOut) text = 'x.com 现在没有登录。取关和读取列表都需要先在 Chrome 里登录 x.com。';
+    else if (live && live.handle && owner && live.handle.toLowerCase() !== owner.toLowerCase()) {
+      text = `x.com 现在登录的是 @${live.handle}，但这里的关注列表是 @${owner} 的。取关前会自动核对，账号不对时会暂停；要整理 @${live.handle} 请重新读取关注列表。`;
+    }
+    for (const id of ['acctWarn', 'acctWarnJob']) {
+      $(id).hidden = !text;
+      $(id).textContent = text;
+    }
   }
 
   // ---------- 关注管理 ----------
@@ -131,7 +189,8 @@
     if (kws.length) list = list.filter((u) => kws.some((k) => `${u.name || ''} ${u.bio || ''}`.toLowerCase().includes(k)));
     const num = (v, d) => (Number.isFinite(v) ? v : d);
     const sorters = {
-      order: (a, b) => (a.firstSeen || 0) - (b.firstSeen || 0),
+      order: (a, b) => (a.seq || 1e9) - (b.seq || 1e9) || (a.firstSeen || 0) - (b.firstSeen || 0),
+      orderRev: (a, b) => (b.seq || 0) - (a.seq || 0) || (b.firstSeen || 0) - (a.firstSeen || 0),
       followersAsc: (a, b) => num(a.followers, 1e12) - num(b.followers, 1e12),
       followersDesc: (a, b) => num(b.followers, -1) - num(a.followers, -1),
       tweetsAsc: (a, b) => num(a.tweets, 1e12) - num(b.tweets, 1e12),
@@ -149,6 +208,7 @@
     $('userSummary').textContent = total
       ? `共 ${total} 人，筛选出 ${list.length} 人，已选 ${selected.size} 人`
       : '还没有数据，先点「读取关注列表」';
+    $('onboard').hidden = total > 0;
     $('enqueueBtn').textContent = `${data.settings.autoStart ? '加入队列并开始取关' : '加入取关队列'}（${selected.size}）`;
     $('pageInfo').textContent = `${page + 1} / ${pages}`;
     $('pageAll').checked = slice.length > 0 && slice.every((u) => selected.has(u.key));
@@ -203,6 +263,20 @@
     selected.forEach((k) => delete wl[k]);
     await chrome.storage.local.set({ whitelist: wl });
   };
+  // 导出当前筛选结果（没有筛选就是全部），取关前留一份备份。
+  $('exportUsers').onclick = () => {
+    const list = filteredUsers();
+    if (!list.length) { alert('没有可导出的人。'); return; }
+    const head = ['用户名', '名字', 'ID', '粉丝', '关注', '推文', '回关', '标签', '白名单', '简介', '主页'];
+    const rows = list.map((u) => [
+      u.handle, u.name || '', u.id || '', u.followers ?? '', u.following ?? '', u.tweets ?? '',
+      u.followsYou === true ? '是' : u.followsYou === false ? '否' : '',
+      u.tags.map((t) => S.TAG_LABELS[t] || t).join(' '), data.whitelist[u.key] ? '是' : '',
+      (u.bio || '').replace(/\s+/g, ' '), `https://x.com/${u.handle}`,
+    ]);
+    download(`x-following-${(data.owner && data.owner.handle) || 'me'}-${S.dayKey()}.csv`, `\ufeff${toCsv([head, ...rows])}`, 'text/csv');
+  };
+
   $('enqueueBtn').onclick = () => act($('enqueueBtn'), async () => {
     if (!selected.size) throw new Error('先勾选要取关的人。');
     const keys = [...selected].map((k) => data.users[k] || k).map((u) => (typeof u === 'string' ? u : u.handle));
@@ -250,6 +324,19 @@
     return left > 0 ? `${left} 秒后` : '马上';
   }
 
+  function etaText(job) {
+    const n = data.queue.length;
+    if (!n || !job || ['tripped', 'paused'].includes(job.status)) return '';
+    const est = S.estimateFinish(job, n, data.settings, Date.now());
+    if (!est) return '';
+    if (data.settings.dryRun) return '';
+    const at = new Date(est.at);
+    const hm = at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const idle = job.status === 'idle' ? '开始后' : '';
+    if (est.days === 0) return `${idle}预计今天 ${hm} 左右处理完队列里的 ${n} 人。`;
+    return `${idle}按每天最多 ${cap} 个的节奏，队列里的 ${n} 人预计 ${at.toLocaleDateString()} ${hm} 左右处理完（还要 ${est.days} 天）。`;
+  }
+
   function renderJob() {
     const job = data.job || { status: 'idle', batch: [], doneToday: 0 };
     const s = data.settings;
@@ -272,6 +359,15 @@
       if (Date.now() >= (job.pausedUntil || 0)) btns.push('<button class="btn primary" data-do="resume">继续取关</button>');
       else btns.push('<button class="btn danger" data-do="force">仍然继续（不建议）</button>');
     }
+
+    $('etaLine').textContent = etaText(job);
+    const e = st && st.exec;
+    let execText = '';
+    if (e && e.mode === 'ui') execText = '执行方式：在固定的小标签页里打开主页点按钮（可在「设置」里改回后台接口）。';
+    else if (e && e.apiBroken) execText = `执行方式：后台接口暂时用不了${e.apiError ? `（${e.apiError}）` : ''}，已自动改为在固定的小标签页里点按钮，${fmtTime(e.apiBrokenUntil)} 后自动再试接口。`;
+    else execText = '执行方式：后台调用 X 网页版接口，不弹窗口。你开着 x.com 时借用那个页面；没开时会在标签栏最左边放一个固定的小标签页，批次休息时自动关掉。';
+    $('execLine').textContent = execText;
+    if (e && e.apiBroken && e.mode !== 'ui') btns.push('<button class="btn" data-do="resetExec">重新尝试后台接口</button>');
     $('jobButtons').innerHTML = btns.join('');
 
     const p = s.pace;
@@ -298,6 +394,7 @@
       if (what === 'confirm') await send({ type: 'xa:confirm' });
       if (what === 'pause') await send({ type: 'xa:pause' });
       if (what === 'resume') await send({ type: 'xa:resume' });
+      if (what === 'resetExec') { await send({ type: 'xa:resetExec' }); await refreshState(); renderJob(); renderHeader(); }
       if (what === 'force') {
         if (!confirm('X 刚刚提示了限制或异常。现在继续，被锁号的风险更高。确定继续吗？')) return;
         await send({ type: 'xa:resume', force: true });
@@ -376,9 +473,9 @@
     renderLog();
   });
   $('refollowBtn').onclick = () => act($('refollowBtn'), async () => {
-    const handles = data.log.filter((l) => logSelected.has(logId(l))).map((l) => l.handle);
-    if (!handles.length) throw new Error('先勾选成功取关的记录。');
-    const r = await send({ type: 'xa:enqueue', keys: handles, action: 'follow', front: true });
+    const keys = data.log.filter((l) => logSelected.has(logId(l))).map((l) => ({ handle: l.handle, id: l.id || null, name: l.name || '' }));
+    if (!keys.length) throw new Error('先勾选成功取关的记录。');
+    const r = await send({ type: 'xa:enqueue', keys, action: 'follow', front: true });
     logSelected.clear();
     renderLog();
     alert(`已把 ${r.added} 个重新关注加到队列最前面，会按同样的节奏执行。${enqueueNote(r)}`);
@@ -386,14 +483,23 @@
   $('exportCsv').onclick = () => {
     const head = ['时间', '用户名', '名字', '动作', '结果', '说明', '批次', '演练'];
     const rows = data.log.map((l) => [fmtTime(l.t), l.handle, l.name || '', l.action, l.label || l.result, l.detail || '', l.batchNo || '', l.dryRun ? '是' : '']);
-    const csv = [head, ...rows].map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\r\n');
-    download(`x-assistant-log-${S.dayKey()}.csv`, `﻿${csv}`, 'text/csv');
+    download(`x-assistant-log-${S.dayKey()}.csv`, `\ufeff${toCsv([head, ...rows])}`, 'text/csv');
   };
   $('clearLog').onclick = async () => {
     if (!confirm('清空所有日志？清空后就不能从日志里重新关注了。')) return;
     logSelected.clear();
     await chrome.storage.local.set({ log: [] });
   };
+
+  // 以 = + - @ 开头的单元格在表格软件里会被当成公式，前面加个单引号。
+  function toCsv(rows) {
+    const cell = (c) => {
+      let v = String(c == null ? '' : c);
+      if (/^[=+\-@]/.test(v)) v = `'${v}`;
+      return `"${v.replace(/"/g, '""')}"`;
+    };
+    return rows.map((r) => r.map(cell).join(',')).join('\r\n');
+  }
 
   function download(name, content, type) {
     const a = document.createElement('a');
@@ -436,6 +542,7 @@
     $('confirmEachBatch').checked = !!s.confirmEachBatch;
     $('autoStart').checked = !!s.autoStart;
     $('dryRun').checked = !!s.dryRun;
+    $('execMode').value = s.execMode;
     $('provider').value = s.llm.provider;
     $('baseUrl').value = s.llm.baseUrl;
     $('model').value = s.llm.model;
@@ -480,6 +587,7 @@
       confirmEachBatch: $('confirmEachBatch').checked,
       autoStart: $('autoStart').checked,
       dryRun: $('dryRun').checked,
+      execMode: $('execMode').value,
       llm,
       ui: { composeButton: $('composeButton').checked, tweetButtons: $('tweetButtons').checked },
     });
@@ -528,6 +636,8 @@
     renderJob();
     renderLog();
     fillSettings();
+    refreshAccount();
+    window.addEventListener('focus', () => refreshAccount());
     const tab = location.hash.replace('#', '');
     if (tab && $(`tab-${tab}`)) showTab(tab);
   })();

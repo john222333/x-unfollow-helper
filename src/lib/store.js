@@ -28,7 +28,9 @@
     newAccountMode: false, // 新号或刚解除限制：每天最多 30 个
     autoStart: true, // 加入队列后自动开始，不用再去点「开始」
     confirmEachBatch: false, // 每批开始前是否要手动确认
-    dryRun: false, // 演练模式：打开主页、找到按钮，但不点击
+    dryRun: false, // 演练模式：检查登录和执行通道是否正常，但不真的取关
+    // 执行方式：auto = 后台调用 X 网页版接口，不可用时自动改为后台标签页点按钮；ui = 只用后台标签页点按钮
+    execMode: 'auto',
     llm: {
       provider: 'anthropic',
       baseUrl: 'https://api.anthropic.com',
@@ -71,11 +73,39 @@
       pace: normalizePace(src.pace),
       llm: { ...DEFAULT_SETTINGS.llm, ...(src.llm || {}) },
       ui: { ...DEFAULT_SETTINGS.ui, ...(src.ui || {}) },
+      execMode: src.execMode === 'ui' ? 'ui' : 'auto',
     };
   }
 
   function effectiveDailyCap(settings) {
     return settings.newAccountMode ? Math.min(30, settings.pace.dailyCap) : settings.pace.dailyCap;
+  }
+
+  // 粗略估计队列什么时候能处理完：每个人按平均间隔算，每批之间加平均休息时间，超过当天额度的顺延到之后几天。
+  // 返回 { at, days }：at 是预计完成时间，days 是还要跨几天（0 表示今天能完成）。
+  function estimateFinish(job, queueLength, settings, now) {
+    const t0 = now || Date.now();
+    const n = Number(queueLength) || 0;
+    if (!n || !settings) return null;
+    const p = settings.pace;
+    const cap = effectiveDailyCap(settings);
+    const perItem = ((p.minDelaySec + p.maxDelaySec) / 2 + 3) * 1000;
+    const rest = ((p.restMinMin + p.restMaxMin) / 2) * 60000;
+    const span = (k) => k * perItem + Math.max(0, Math.ceil(k / p.batchSize) - 1) * rest;
+    const doneToday = job && job.day === dayKey(t0) ? job.doneToday || 0 : 0;
+    const leftToday = Math.max(0, cap - doneToday);
+    let start = t0;
+    if (job && job.status === 'running' && job.nextActionAt > t0) start = job.nextActionAt;
+    if (n <= leftToday) {
+      const at = start + span(n);
+      return { at, days: dayKey(at) === dayKey(t0) ? 0 : 1 };
+    }
+    const after = n - leftToday;
+    const days = Math.ceil(after / cap);
+    const lastDay = after - (days - 1) * cap;
+    const d = new Date(t0);
+    d.setHours(24 * days, 30, 0, 0); // 每天额度恢复后不久开始
+    return { at: d.getTime() + span(lastDay), days };
   }
 
   function dayKey(t) {
@@ -115,6 +145,6 @@
   };
 
   root.XAStore = {
-    LIMITS, DEFAULT_SETTINGS, SETTINGS_VERSION, normalizePace, mergeSettings, effectiveDailyCap, dayKey, userKey, tagsFor, TAG_LABELS,
+    LIMITS, DEFAULT_SETTINGS, SETTINGS_VERSION, normalizePace, mergeSettings, effectiveDailyCap, estimateFinish, dayKey, userKey, tagsFor, TAG_LABELS,
   };
 })(typeof globalThis !== 'undefined' ? globalThis : self);

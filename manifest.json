@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "X 助手：分批取关 + 推文体检",
   "short_name": "X 助手",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "在已登录的 x.com 上分批、慢速取关；给推文的 AI 味和算法友好度打分并给出修改建议。非 X 官方产品。",
   "minimum_chrome_version": "120",
   "icons": {
@@ -11,29 +11,47 @@
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
   },
-  "permissions": ["storage", "unlimitedStorage", "alarms", "notifications"],
+  "permissions": [
+    "storage",
+    "unlimitedStorage",
+    "alarms",
+    "notifications",
+    "scripting"
+  ],
   "host_permissions": [
     "https://x.com/*",
+    "https://abs.twimg.com/*",
     "https://api.anthropic.com/*",
     "http://localhost/*",
     "http://127.0.0.1/*"
   ],
-  "optional_host_permissions": ["https://*/*", "http://*/*"],
+  "optional_host_permissions": [
+    "https://*/*",
+    "http://*/*"
+  ],
   "background": {
     "service_worker": "src/background.js"
   },
   "content_scripts": [
     {
-      "matches": ["https://x.com/*"],
-      "js": ["src/content/page-hook.js"],
+      "matches": [
+        "https://x.com/*"
+      ],
+      "js": [
+        "src/content/page-hook.js"
+      ],
       "run_at": "document_start",
       "world": "MAIN"
     },
     {
-      "matches": ["https://x.com/*"],
+      "matches": [
+        "https://x.com/*"
+      ],
       "js": [
+        "src/lib/store.js",
         "src/lib/rules.js",
         "src/lib/algo.js",
+        "src/lib/xapi.js",
         "src/lib/panel.js",
         "src/content/x-dom.js",
         "src/content/content.js"
