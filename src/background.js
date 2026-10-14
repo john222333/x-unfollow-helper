@@ -16,6 +16,7 @@ const RESULT_LABELS = {
   pending: '已发送关注请求（受保护账号）',
   rate_limited: 'X 提示操作过于频繁',
   auth: '需要重新登录',
+  wrong_account: '登录的账号不对',
   locked: '账号被临时锁定',
   captcha: '出现人机验证',
   not_applied: '点击后状态没有变化',
@@ -67,6 +68,7 @@ const DEFAULT_JOB = {
   day: S.dayKey(),
   doneToday: 0,
   consecutiveFail: 0,
+  consecutiveAlready: 0,
   lastError: '',
   pausedUntil: 0,
 };
@@ -123,8 +125,11 @@ async function getWorker() {
   const { worker } = await store.get('worker');
   if (!worker || worker.tabId == null) return null;
   try {
+    // 浏览器重启后标签页 ID 会重新编号，可能正好撞上你自己的标签页，所以要核对窗口。
     const tab = await chrome.tabs.get(worker.tabId);
-    return tab ? worker : null;
+    if (!tab || tab.windowId !== worker.windowId) return null;
+    const win = await chrome.windows.get(worker.windowId);
+    return win && win.type === 'popup' ? worker : null;
   } catch {
     return null;
   }
@@ -149,14 +154,18 @@ function waitForComplete(tabId, timeoutMs) {
   });
 }
 
-async function openInWorker(url) {
+async function openInWorker(url, opts) {
+  const focused = !!(opts && opts.focused);
   let worker = await getWorker();
   if (!worker) {
     // 先开空白窗口再导航，这样每次打开页面都走同一条「等待加载完成」的路径。
-    const win = await chrome.windows.create({ url: 'about:blank', type: 'popup', focused: false, width: 520, height: 900 });
+    // 窄于 500 像素时 X 会切到手机版布局，左侧导航（用来识别账号）就没了，所以留足宽度。
+    const win = await chrome.windows.create({ url: 'about:blank', type: 'popup', focused, width: 760, height: 900 });
     worker = { tabId: win.tabs[0].id, windowId: win.id };
     await store.set({ worker });
     await sleep(300);
+  } else if (focused) {
+    try { await chrome.windows.update(worker.windowId, { focused: true }); } catch { /* 忽略 */ }
   }
   const loaded = waitForComplete(worker.tabId);
   await chrome.tabs.update(worker.tabId, { url });
@@ -164,10 +173,12 @@ async function openInWorker(url) {
   return worker.tabId;
 }
 
+// 只有正在处理一批时才保留工作窗口；批次间休息、等待确认、暂停时都关掉，下次需要再开。
 async function closeWorkerIfIdle() {
   const job = await getJob();
-  const { collect } = await store.get('collect');
-  if (['running', 'awaiting_confirm'].includes(job.status) || (collect && collect.status === 'running')) return;
+  const collect = await getCollect();
+  const busy = job.status === 'running' && (job.current || job.batch.length);
+  if (busy || (collect && collect.status === 'running')) return;
   const worker = await getWorker();
   if (worker) {
     try { await chrome.windows.remove(worker.windowId); } catch { /* 已关闭 */ }
@@ -192,6 +203,22 @@ async function sendToTab(tabId, msg, timeoutMs) {
 }
 
 // ---------- 关注列表 ----------
+
+const COLLECT_STALE_MS = 3 * 60 * 1000;
+
+// 读取中的页面崩溃、被关闭或跳走时收不到「完成」消息，超过 3 分钟没有进度就当作已中断。
+async function getCollect() {
+  const { collect } = await store.get('collect');
+  if (collect && collect.status === 'running') {
+    const last = collect.lastProgressAt || collect.startedAt || 0;
+    if (Date.now() - last > COLLECT_STALE_MS) {
+      const stopped = { ...collect, status: 'stopped', message: '读取中断了（页面没有响应），可以重新读取' };
+      await store.set({ collect: stopped });
+      return stopped;
+    }
+  }
+  return collect || null;
+}
 
 const mergeUsers = (users, runId) => withLock(async () => {
   const { users: stored } = await store.get('users');
@@ -227,18 +254,25 @@ async function startCollect() {
   if (['running', 'awaiting_confirm'].includes(job.status)) {
     throw new Error('取关任务进行中，请先暂停再读取关注列表。');
   }
+  const current = await getCollect();
+  if (current && current.status === 'running') throw new Error('正在读取中，请等它结束或先点「停止读取」。');
   const runId = `run-${Date.now()}`;
-  await store.set({ collect: { status: 'running', runId, startedAt: Date.now(), count: 0, message: '正在打开 x.com…' } });
+  await store.set({ collect: { status: 'running', runId, startedAt: Date.now(), lastProgressAt: Date.now(), count: 0, message: '正在打开 x.com…' } });
   try {
-    let tabId = await openInWorker('https://x.com/home');
+    // 窗口被完全挡住或最小化时，浏览器会暂停页面渲染，X 就不再往下加载列表，所以读取时放到前面。
+    let tabId = await openInWorker('https://x.com/home', { focused: true });
     const who = await sendToTab(tabId, { type: 'xa:whoami' }, 20000);
-    const handle = who && who.handle;
-    if (!handle) throw new Error('没有检测到已登录的账号，请先在 Chrome 里登录 x.com。');
-    await store.set({ me: { handle, at: Date.now() } });
-    tabId = await openInWorker(`https://x.com/${handle}/following`);
+    if (who && who.loggedOut) throw new Error('x.com 没有登录，请先在 Chrome 里登录 x.com。');
+    // 页面上找不到账号入口时，用之前识别到的账号。
+    const { me } = await store.get('me');
+    const handle = (who && who.handle) || (me && me.handle);
+    if (!handle) throw new Error('没有检测到已登录的账号，请先在 Chrome 里打开并登录 x.com。');
+    // owner 记的是「这份关注列表属于谁」；me 会随你打开的任何 x.com 页面更新，不能拿来核对。
+    await store.set({ me: { handle, at: Date.now() }, owner: { handle, at: Date.now() } });
+    tabId = await openInWorker(`https://x.com/${handle}/following`, { focused: true });
     const r = await sendToTab(tabId, { type: 'xa:collect', runId }, 15000);
     if (!r || !r.started) throw new Error('页面没有开始读取，请刷新后重试。');
-    await store.set({ collect: { status: 'running', runId, startedAt: Date.now(), count: 0, handle, message: '正在滚动读取…' } });
+    await store.set({ collect: { status: 'running', runId, startedAt: Date.now(), lastProgressAt: Date.now(), count: 0, handle, message: '正在滚动读取…' } });
   } catch (e) {
     await store.set({ collect: { status: 'error', runId, message: e.message === 'timeout' ? '打开 x.com 超时' : e.message } });
     await closeWorkerIfIdle();
@@ -250,17 +284,20 @@ async function finishCollect(msg) {
   const { collect } = await store.get('collect');
   if (!collect || collect.runId !== msg.runId) return;
   let removed = 0;
+  let pruneSkipped = false;
   if (msg.complete && msg.seen > 0) {
     // 本次完整读取中没出现的人，说明你已经不再关注他们了。
     await withLock(async () => {
       const { users } = await store.get('users');
       const map = users || {};
-      for (const [k, u] of Object.entries(map)) {
-        if (u.runId !== msg.runId) {
-          delete map[k];
-          removed++;
-        }
+      const stale = Object.keys(map).filter((k) => map[k].runId !== msg.runId);
+      // 一次要删掉两成以上，更可能是列表没加载全，这时保留旧记录。
+      if (stale.length > 20 && stale.length > Object.keys(map).length * 0.2) {
+        pruneSkipped = true;
+        return;
       }
+      for (const k of stale) delete map[k];
+      removed = stale.length;
       await store.set({ users: map });
     });
   }
@@ -272,7 +309,9 @@ async function finishCollect(msg) {
       finishedAt: Date.now(),
       count: Object.keys(users || {}).length,
       removed,
-      message: msg.complete ? '读取完成' : (msg.reason || '已停止'),
+      message: msg.complete
+        ? (pruneSkipped ? '读取完成（这次读到的人比上次少很多，可能没加载全，旧记录先保留）' : '读取完成')
+        : (msg.reason || '已停止'),
     },
   });
   await closeWorkerIfIdle();
@@ -285,7 +324,11 @@ async function enqueue(keys, action, front) {
     const { users, whitelist } = await store.get(['users', 'whitelist']);
     const map = users || {};
     const wl = whitelist || {};
-    const queue = await getQueue();
+    let queue = await getQueue();
+    // 同一个人只保留最新的动作，避免取关和重新关注同时在队列里。
+    const opposite = action === 'follow' ? 'unfollow' : 'follow';
+    const incoming = new Set(keys.map((raw) => S.userKey(raw.handle || raw)));
+    queue = queue.filter((q) => !(q.action === opposite && incoming.has(q.key)));
     const exists = new Set(queue.map((q) => `${q.action}:${q.key}`));
     const items = [];
     let skipped = 0;
@@ -323,7 +366,7 @@ function prepareBatch(job, queue, settings) {
 }
 
 async function startJob() {
-  const { collect } = await store.get('collect');
+  const collect = await getCollect();
   if (collect && collect.status === 'running') throw new Error('正在读取关注列表，请等它结束。');
   const settings = await getSettings();
   const queue = await getQueue();
@@ -334,10 +377,25 @@ async function startJob() {
   job.status = 'running';
   job.batchConfirmed = true;
   job.consecutiveFail = 0;
+  job.consecutiveAlready = 0;
   job.lastError = '';
   job.nextActionAt = Math.max(Date.now(), job.nextActionAt || 0);
   await saveJob(job);
   await kick();
+}
+
+// 加入队列后自动开始：只在任务空闲时启动；你手动暂停或被熔断时不会自动恢复。
+async function maybeAutoStart(added) {
+  const settings = await getSettings();
+  const job = await getJob();
+  if (!added || !settings.autoStart) return { started: false, status: job.status };
+  if (job.status !== 'idle') return { started: false, status: job.status };
+  try {
+    await startJob();
+    return { started: true, status: 'running' };
+  } catch (e) {
+    return { started: false, status: job.status, startError: e.message };
+  }
 }
 
 async function confirmBatch() {
@@ -356,6 +414,7 @@ async function pauseJob() {
   job.status = 'paused';
   await saveJob(job);
   await kick();
+  if (!job.current) await closeWorkerIfIdle(); // 执行中的那一个结束后由 step 关窗口
 }
 
 async function resumeJob(force) {
@@ -373,9 +432,12 @@ async function trip(job, reason, detail) {
   job.lastError = `${RESULT_LABELS[reason] || reason}${detail ? `：${detail}` : ''}`;
   await saveJob(job);
   notify('X 助手已自动暂停取关', `${job.lastError}。建议休息 24 小时后再继续。`);
+  await closeWorkerIfIdle();
 }
 
 async function perform(item, settings) {
+  const { owner, me } = await store.get(['owner', 'me']);
+  const expected = (owner && owner.handle) || (me && me.handle);
   let tabId;
   try {
     tabId = await openInWorker(`https://x.com/${encodeURIComponent(item.handle)}`);
@@ -385,7 +447,7 @@ async function perform(item, settings) {
   try {
     const res = await sendToTab(
       tabId,
-      { type: 'xa:act', action: item.action, handle: item.handle, id: item.id, dryRun: settings.dryRun },
+      { type: 'xa:act', action: item.action, handle: item.handle, id: item.id, dryRun: settings.dryRun, me: expected },
       60000,
     );
     return res || { result: 'no_response' };
@@ -414,6 +476,14 @@ async function step() {
   const job = await getJob();
   const now = Date.now();
 
+  // 关掉「每批确认」后，原来停在等待确认的批次直接开始。
+  if (job.status === 'awaiting_confirm' && !settings.confirmEachBatch) {
+    job.status = 'running';
+    job.batchConfirmed = true;
+    job.nextActionAt = Math.max(now, job.nextActionAt || 0);
+    await saveJob(job);
+  }
+
   if (job.status === 'daily_cap' && now >= job.nextActionAt) {
     const queue = await getQueue();
     if (!queue.length) { job.status = 'idle'; await saveJob(job); return; }
@@ -424,7 +494,7 @@ async function step() {
     if (settings.confirmEachBatch) notify('X 助手：新的一天', '今天的取关额度已恢复，确认后开始下一批。');
     return;
   }
-  if (job.status !== 'running') { await saveJob(job); return; }
+  if (job.status !== 'running') return;
   if (now < job.nextActionAt) return;
 
   if (job.doneToday >= S.effectiveDailyCap(settings)) {
@@ -450,14 +520,18 @@ async function step() {
       job.status = 'awaiting_confirm';
       await saveJob(job);
       notify('X 助手：下一批已就绪', `共 ${job.batch.length} 个，打开管理页确认后开始。`);
+      await closeWorkerIfIdle();
       return;
     }
     job.batchConfirmed = true;
   }
   if (!job.batchConfirmed) {
-    job.status = 'awaiting_confirm';
-    await saveJob(job);
-    return;
+    if (settings.confirmEachBatch) {
+      job.status = 'awaiting_confirm';
+      await saveJob(job);
+      return;
+    }
+    job.batchConfirmed = true;
   }
 
   const key = job.batch[0];
@@ -470,6 +544,7 @@ async function step() {
   job.current = item.key;
   await saveJob(job);
 
+  const dryRun = !!settings.dryRun;
   const res = await perform(item, settings);
   const result = res.result || 'error';
 
@@ -486,37 +561,73 @@ async function step() {
     label: RESULT_LABELS[result] || result,
     detail: res.detail || '',
     batchNo: latest.batchNo,
-    dryRun: !!settings.dryRun,
+    dryRun,
   }]);
 
   if (TRIP_NOW.has(result)) {
     await trip(latest, result, res.detail);
     return;
   }
+  if (result === 'wrong_account') {
+    // 不是 X 的限制，不用冷却；队列原样保留，切回正确的账号后点继续即可。
+    latest.status = 'paused';
+    latest.lastError = `${res.detail || '登录的账号和关注列表不一致'}。请在 x.com 切换到正确的账号后点「继续取关」。`;
+    await saveJob(latest);
+    notify('X 助手已暂停取关', latest.lastError);
+    await closeWorkerIfIdle();
+    return;
+  }
 
-  await withLock(async () => {
-    queue = (await getQueue()).filter((q) => !(q.key === item.key && q.action === item.action));
-    await store.set({ queue });
-  });
   latest.batch = latest.batch.filter((k) => k !== item.key);
 
-  if (result === 'ok') {
-    latest.doneToday += 1;
-    if (item.action === 'unfollow') {
-      await withLock(async () => {
-        const { users } = await store.get('users');
-        if (users && users[item.key]) {
-          delete users[item.key];
-          await store.set({ users });
-        }
-      });
-    }
+  // 演练不改动队列：演练完一批就停下，关掉演练模式后同一批人还在队列里。
+  if (!dryRun) {
+    await withLock(async () => {
+      const all = await getQueue();
+      const idx = all.findIndex((q) => q.key === item.key && q.action === item.action);
+      if (idx < 0) return;
+      const [done] = all.splice(idx, 1);
+      // 加载超时、没找到按钮这类偶发失败，放回队尾再试，最多重试 2 次。
+      if (SOFT_FAIL.has(result) && (done.tries || 0) < 2) all.push({ ...done, tries: (done.tries || 0) + 1 });
+      await store.set({ queue: all });
+    });
+  }
+
+  if (result === 'ok') latest.doneToday += 1;
+  if (!dryRun && item.action === 'unfollow' && result === 'ok') {
+    await withLock(async () => {
+      const { users } = await store.get('users');
+      if (users && users[item.key]) {
+        delete users[item.key];
+        await store.set({ users });
+      }
+    });
+  }
+
+  // 连续很多人都显示「没在关注」，多半是登录的账号不对或列表过期了，先停下来。
+  latest.consecutiveAlready = result === 'already' ? (latest.consecutiveAlready || 0) + 1 : 0;
+  if (latest.consecutiveAlready >= 5 && latest.status === 'running') {
+    latest.status = 'paused';
+    latest.consecutiveAlready = 0;
+    latest.lastError = '连续 5 个人都显示你没有关注他们。请确认 x.com 登录的是你要整理的账号，必要时重新读取关注列表，再继续。';
+    await saveJob(latest);
+    notify('X 助手已暂停取关', latest.lastError);
+    await closeWorkerIfIdle();
+    return;
   }
 
   if (SOFT_FAIL.has(result)) {
     latest.consecutiveFail += 1;
     const limit = result === 'not_applied' ? 2 : 3;
     if (latest.consecutiveFail >= limit) {
+      if (dryRun) {
+        // 演练没有真的点击，不会触发 X 的限制，用不着冷却 24 小时。
+        latest.status = 'paused';
+        latest.lastError = `演练中连续 ${latest.consecutiveFail} 次失败（${RESULT_LABELS[result] || result}），可能是 X 改版了页面，请把日志截图发给开发者。`;
+        await saveJob(latest);
+        await closeWorkerIfIdle();
+        return;
+      }
       await trip(latest, result, `连续 ${latest.consecutiveFail} 次失败`);
       return;
     }
@@ -527,11 +638,23 @@ async function step() {
   const p = settings.pace;
   if (!latest.batch.length) {
     latest.batchConfirmed = false;
+    if (dryRun) {
+      if (latest.status === 'running') {
+        latest.status = 'idle';
+        latest.lastError = '';
+        notify('X 助手：演练完成', '队列保持不变。到「日志」看结果，没问题就关掉演练模式再开始。');
+      }
+      await saveJob(latest);
+      await closeWorkerIfIdle();
+      return;
+    }
     latest.nextActionAt = Date.now() + rand(p.restMinMin, p.restMaxMin) * 60000;
   } else {
     latest.nextActionAt = Date.now() + rand(p.minDelaySec, p.maxDelaySec) * 1000;
   }
   await saveJob(latest);
+  // 批次结束要休息很久，或者执行期间被暂停了：关掉工作窗口。
+  if (!latest.batch.length || latest.status !== 'running') await closeWorkerIfIdle();
 }
 
 async function scheduleNext() {
@@ -558,6 +681,16 @@ function hashText(s) {
   let h = 5381;
   for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
   return (h >>> 0).toString(36);
+}
+
+// 等模型回复时 service worker 没有别的事件，30 秒后可能被浏览器结束；定时调一个扩展接口让它保持运行。
+async function keepAlive(fn) {
+  const timer = setInterval(() => { chrome.runtime.getPlatformInfo().catch(() => {}); }, 20000);
+  try {
+    return await fn();
+  } finally {
+    clearInterval(timer);
+  }
 }
 
 function llmConfigured(cfg) {
@@ -589,7 +722,7 @@ async function analyzeTweet(text, useLLM) {
   let llmError = '';
   if (useLLM !== false && configured) {
     try {
-      llm = await cached('analyze', clean, settings.llm, () => self.XALLM.analyze(settings.llm, clean));
+      llm = await cached('analyze', clean, settings.llm, () => keepAlive(() => self.XALLM.analyze(settings.llm, clean)));
     } catch (e) {
       llmError = e.message;
     }
@@ -602,7 +735,7 @@ async function analyzeTweet(text, useLLM) {
 async function rewriteTweet(text, analysis) {
   const settings = await getSettings();
   if (!llmConfigured(settings.llm)) throw new Error('改写需要先在设置页配置 LLM。');
-  const rewrites = await self.XALLM.rewrite(settings.llm, text, analysis);
+  const rewrites = await keepAlive(() => self.XALLM.rewrite(settings.llm, text, analysis));
   return rewrites.map((r) => ({ ...r, rules: self.XARules.analyze(r.text), length: self.XARules.weightedLength(r.text) }));
 }
 
@@ -620,7 +753,10 @@ async function handle(msg, sender) {
         const { collect } = await store.get('collect');
         if (collect && collect.runId === msg.runId && collect.status === 'running') {
           const { users } = await store.get('users');
-          await store.set({ collect: { ...collect, seen: msg.seen, count: Object.keys(users || {}).length, message: `已读取 ${msg.seen} 个` } });
+          const message = msg.hidden
+            ? `已读取 ${msg.seen} 个。读取窗口被挡住或最小化了，X 不会继续加载，请把那个小窗口露出来`
+            : `已读取 ${msg.seen} 个`;
+          await store.set({ collect: { ...collect, seen: msg.seen, lastProgressAt: Date.now(), count: Object.keys(users || {}).length, message } });
         }
       });
       return { ok: true };
@@ -635,20 +771,25 @@ async function handle(msg, sender) {
       if (worker) {
         try { await chrome.tabs.sendMessage(worker.tabId, { type: 'xa:stopCollect' }); } catch { /* 页面已关闭 */ }
       }
-      const { collect } = await store.get('collect');
-      if (collect && collect.status === 'running') {
-        await store.set({ collect: { ...collect, status: 'stopped', message: '已停止' } });
-      }
+      // 和进度消息排队，避免进度把「已停止」又改回「读取中」。
+      await withCollectLock(async () => {
+        const { collect } = await store.get('collect');
+        if (collect && collect.status === 'running') {
+          await store.set({ collect: { ...collect, status: 'stopped', message: '已停止' } });
+        }
+      });
       await closeWorkerIfIdle();
       return { ok: true };
     }
-    case 'xa:enqueue':
-      return enqueue(msg.keys || [], msg.action === 'follow' ? 'follow' : 'unfollow', !!msg.front);
+    case 'xa:enqueue': {
+      const r = await enqueue(msg.keys || [], msg.action === 'follow' ? 'follow' : 'unfollow', !!msg.front);
+      return { ...r, ...(await maybeAutoStart(r.added)) };
+    }
     case 'xa:dequeue':
       return removeFromQueue(msg.keys || []);
     case 'xa:clearQueue':
-      await store.set({ queue: [] });
       await withLock(async () => {
+        await store.set({ queue: [] });
         const job = await getJob();
         job.batch = [];
         if (['running', 'awaiting_confirm'].includes(job.status)) job.status = 'idle';
@@ -685,7 +826,7 @@ async function handle(msg, sender) {
     case 'xa:ping': {
       const settings = await getSettings();
       const cfg = { ...settings.llm, ...(msg.llm || {}) };
-      return { ok: await self.XALLM.ping(cfg) };
+      return { ok: await keepAlive(() => self.XALLM.ping(cfg)) };
     }
     case 'xa:openOptions':
       await chrome.runtime.openOptionsPage();
@@ -733,4 +874,13 @@ chrome.runtime.onInstalled.addListener(async (details) => {
   await kick();
 });
 
-chrome.runtime.onStartup.addListener(() => kick());
+chrome.runtime.onStartup.addListener(async () => {
+  // 上次的工作窗口已经不在了，记录作废。
+  await store.set({ worker: null });
+  await kick();
+});
+
+// 设置变了（比如关掉了「每批确认」）立刻按新设置跑一次。
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'local' && changes.settings) kick();
+});

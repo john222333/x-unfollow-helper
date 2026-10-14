@@ -29,6 +29,10 @@ test('口语化推文得分低', () => {
 test('X 的计数长度：中文算 2', () => {
   assert.strictEqual(XARules.weightedLength('abc'), 3);
   assert.strictEqual(XARules.weightedLength('你好a'), 5);
+  assert.strictEqual(XARules.weightedLength('看 https://example.com/a/very/long/path?x=1 吧'), 2 + 1 + 23 + 1 + 2);
+  assert.strictEqual(XARules.weightedLength('ok👍🏽'), 4);
+  assert.strictEqual(XARules.weightedLength('你好，世界'), 10);
+  assert.strictEqual(XARules.weightedLength('a—b'), 3);
 });
 
 test('算法推算：基线 50 分，更好更高，带举报风险更低', () => {
@@ -61,4 +65,44 @@ test('标签', () => {
 test('宽松解析模型返回的 JSON', () => {
   assert.deepStrictEqual(XALLM.parseLooseJson('```json\n{"a":1}\n```'), { a: 1 });
   assert.deepStrictEqual(XALLM.parseLooseJson('好的：{"a":2} 完'), { a: 2 });
+});
+
+test('老版本设置迁移：默认改为不用每批确认，之后尊重用户的选择', () => {
+  const old = XAStore.mergeSettings({ confirmEachBatch: true, dryRun: true });
+  assert.strictEqual(old.confirmEachBatch, false);
+  assert.strictEqual(old.dryRun, true);
+  assert.strictEqual(old.autoStart, true);
+  assert.strictEqual(old.v, XAStore.SETTINGS_VERSION);
+  const chosen = XAStore.mergeSettings({ ...old, confirmEachBatch: true });
+  assert.strictEqual(chosen.confirmEachBatch, true);
+  assert.strictEqual(XAStore.mergeSettings().confirmEachBatch, false);
+});
+
+test('流式回复：拼出 Anthropic 的文本，换模型时丢掉前一个模型的半截内容', async () => {
+  const sse = [
+    'event: message_start\ndata: {"type":"message_start","message":{}}\n\n',
+    'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}\n\n',
+    'event: content_block_start\ndata: {"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}\n\n',
+    'event: content_block_delta\ndata: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"{\\"ok\\": "}}\n\n',
+    'event: content_block_delta\r\ndata: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"true}"}}\r\n\r\n',
+    'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}\n\n',
+  ];
+  const res = new Response(new ReadableStream({ start(c) { for (const x of sse) c.enqueue(new TextEncoder().encode(x)); c.close(); } }), { headers: { 'content-type': 'text/event-stream' } });
+  const out = await XALLM.readAnthropic(res);
+  assert.deepStrictEqual(XALLM.parseLooseJson(out.text), { ok: true });
+  assert.strictEqual(out.stopReason, 'end_turn');
+
+  const withFallback = [
+    'data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":"半截"}}\n\n',
+    'data: {"type":"content_block_start","index":1,"content_block":{"type":"fallback"}}\n\n',
+    'data: {"type":"content_block_start","index":2,"content_block":{"type":"text","text":""}}\n\n',
+    'data: {"type":"content_block_delta","index":2,"delta":{"type":"text_delta","text":"完整"}}\n\n',
+  ];
+  const res2 = new Response(withFallback.join(''), { headers: { 'content-type': 'text/event-stream' } });
+  assert.strictEqual((await XALLM.readAnthropic(res2)).text, '完整');
+
+  const oa = new Response('data: {"choices":[{"delta":{"content":"{\\"a\\":"}}]}\n\ndata: {"choices":[{"delta":{"content":"1}"}}]}\n\ndata: [DONE]\n\n', { headers: { 'content-type': 'text/event-stream' } });
+  assert.strictEqual(await XALLM.readOpenAI(oa), '{"a":1}');
+  const plain = new Response(JSON.stringify({ choices: [{ message: { content: '{"b":2}' } }] }), { headers: { 'content-type': 'application/json' } });
+  assert.strictEqual(await XALLM.readOpenAI(plain), '{"b":2}');
 });

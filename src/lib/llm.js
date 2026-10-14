@@ -93,30 +93,61 @@ change_note 用中文一句话说改了什么。只输出 JSON。`;
     return { supportsFallback, supportsEffort };
   }
 
-  async function fetchJson(url, init, timeoutMs) {
+  // 用流式接口：Chrome 会结束等待响应头超过 30 秒的 service worker，
+  // 流式请求马上就有响应头，长一点的改写也不会被中途掐断。
+  async function openRequest(url, init, timeoutMs) {
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), timeoutMs || 120000);
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs || 180000);
     let res;
     try {
       res = await fetch(url, { ...init, signal: ctrl.signal });
     } catch (e) {
+      clearTimeout(timer);
       if (e.name === 'AbortError') throw new Error('请求超时，请稍后重试或换一个更快的模型。');
       throw new Error(`无法连接 ${new URL(url).host}：${e.message}。如果是自定义地址，请到设置页点「保存」授权访问。`);
-    } finally {
-      clearTimeout(timer);
     }
-    const text = await res.text();
-    let body;
-    try { body = JSON.parse(text); } catch { body = null; }
     if (!res.ok) {
+      clearTimeout(timer);
+      const text = await res.text().catch(() => '');
+      let body;
+      try { body = JSON.parse(text); } catch { body = null; }
       const msg = (body && (body.error && (body.error.message || body.error))) || text.slice(0, 300);
       const err = new Error(`接口返回 ${res.status}：${typeof msg === 'string' ? msg : JSON.stringify(msg)}`);
       err.status = res.status;
       err.body = text;
       throw err;
     }
-    return body;
+    return { res, ctrl, done: () => clearTimeout(timer) };
   }
+
+  // 读 SSE：每个事件回调一次 (事件名, data 字符串)。
+  async function readSSE(res, onEvent) {
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    const flush = (chunk) => {
+      let event = 'message';
+      const data = [];
+      for (const line of chunk.split('\n')) {
+        if (line.startsWith('event:')) event = line.slice(6).trim();
+        else if (line.startsWith('data:')) data.push(line.slice(5).replace(/^ /, ''));
+      }
+      if (data.length) onEvent(event, data.join('\n'));
+    };
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true }).replace(/\r\n?/g, '\n');
+      let i;
+      while ((i = buf.indexOf('\n\n')) >= 0) {
+        flush(buf.slice(0, i));
+        buf = buf.slice(i + 2);
+      }
+    }
+    if (buf.trim()) flush(buf);
+  }
+
+  const isJson = (res) => /application\/json/i.test(res.headers.get('content-type') || '');
 
   function parseLooseJson(text) {
     const s = String(text || '').replace(/^\s*```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '');
@@ -125,6 +156,40 @@ change_note 用中文一句话说改了什么。只输出 JSON。`;
     const end = s.lastIndexOf('}');
     if (start >= 0 && end > start) return JSON.parse(s.slice(start, end + 1));
     throw new Error('模型没有返回有效的 JSON。');
+  }
+
+  // 把 Anthropic 的流式事件拼回完整结果。
+  async function readAnthropic(res) {
+    if (isJson(res)) {
+      // 有些代理会忽略 stream 参数，直接返回完整 JSON。
+      const body = await res.json();
+      const block = (body.content || []).filter((b) => b.type === 'text').pop();
+      return { text: block ? block.text : '', stopReason: body.stop_reason };
+    }
+    const blocks = {};
+    let text = '';
+    let stopReason = null;
+    let error = null;
+    await readSSE(res, (event, data) => {
+      let ev;
+      try { ev = JSON.parse(data); } catch { return; }
+      const type = ev.type || event;
+      if (type === 'content_block_start') {
+        const kind = ev.content_block && ev.content_block.type;
+        // 拒答后换模型接着答：前一个模型写了一半的内容作废。
+        if (kind === 'fallback') text = '';
+        blocks[ev.index] = kind;
+        if (kind === 'text' && ev.content_block.text) text += ev.content_block.text;
+      } else if (type === 'content_block_delta') {
+        if (blocks[ev.index] === 'text' && ev.delta && ev.delta.type === 'text_delta') text += ev.delta.text;
+      } else if (type === 'message_delta') {
+        if (ev.delta && ev.delta.stop_reason) stopReason = ev.delta.stop_reason;
+      } else if (type === 'error') {
+        error = (ev.error && ev.error.message) || '接口返回错误';
+      }
+    });
+    if (error) throw new Error(`接口返回错误：${error}`);
+    return { text, stopReason };
   }
 
   async function callAnthropic(cfg, system, user, schema) {
@@ -140,6 +205,7 @@ change_note 用中文一句话说改了什么。只输出 JSON。`;
     const body = {
       model: cfg.model,
       max_tokens: 16000,
+      stream: true,
       system,
       messages: [{ role: 'user', content: user }],
       output_config: { format: { type: 'json_schema', schema } },
@@ -147,52 +213,90 @@ change_note 用中文一句话说改了什么。只输出 JSON。`;
     if (supportsEffort && cfg.effort) body.output_config.effort = cfg.effort;
     if (supportsFallback) body.fallbacks = 'default';
 
-    let res;
+    const send = () => openRequest(`${base}/v1/messages`, { method: 'POST', headers, body: JSON.stringify(body) });
+    let req;
     try {
-      res = await fetchJson(`${base}/v1/messages`, { method: 'POST', headers, body: JSON.stringify(body) });
+      req = await send();
     } catch (e) {
       // 老模型或代理不支持结构化输出时，退回到提示词约束 JSON。
       if (e.status === 400 && /output_config|format|json_schema|effort|fallbacks/i.test(e.body || '')) {
         delete body.output_config;
         delete body.fallbacks;
         delete headers['anthropic-beta'];
-        res = await fetchJson(`${base}/v1/messages`, { method: 'POST', headers, body: JSON.stringify(body) });
+        req = await send();
       } else {
         throw e;
       }
     }
-    if (res.stop_reason === 'refusal') throw new Error('模型拒绝处理这段内容。');
-    if (res.stop_reason === 'max_tokens') throw new Error('模型输出被截断，请重试。');
-    const block = (res.content || []).find((b) => b.type === 'text');
-    if (!block) throw new Error('模型没有返回文本。');
-    return parseLooseJson(block.text);
+    let out;
+    try {
+      out = await readAnthropic(req.res);
+    } finally {
+      req.done();
+    }
+    if (out.stopReason === 'refusal') throw new Error('模型拒绝处理这段内容。');
+    if (out.stopReason === 'max_tokens') throw new Error('模型输出被截断，请重试。');
+    if (!out.text) throw new Error('模型没有返回文本。');
+    return parseLooseJson(out.text);
+  }
+
+  async function readOpenAI(res) {
+    if (isJson(res)) {
+      const body = await res.json();
+      return (body && body.choices && body.choices[0] && body.choices[0].message && body.choices[0].message.content) || '';
+    }
+    let text = '';
+    let error = null;
+    await readSSE(res, (event, data) => {
+      if (data.trim() === '[DONE]') return;
+      let ev;
+      try { ev = JSON.parse(data); } catch { return; }
+      if (ev.error) error = ev.error.message || JSON.stringify(ev.error);
+      const delta = ev.choices && ev.choices[0] && ev.choices[0].delta;
+      if (delta && typeof delta.content === 'string') text += delta.content;
+    });
+    if (error) throw new Error(`接口返回错误：${error}`);
+    return text;
   }
 
   async function callOpenAICompatible(cfg, system, user, schema) {
-    const base = (cfg.baseUrl || '').replace(/\/+$/, '');
+    let base = (cfg.baseUrl || '').replace(/\/+$/, '');
     if (!base) throw new Error('请先在设置页填写接口地址。');
     const headers = { 'content-type': 'application/json' };
     if (cfg.apiKey) headers.authorization = `Bearer ${cfg.apiKey}`;
     const body = {
       model: cfg.model,
+      stream: true,
       messages: [
         { role: 'system', content: `${system}\n\nJSON 结构：${JSON.stringify(schema)}` },
         { role: 'user', content: user },
       ],
       response_format: { type: 'json_object' },
     };
-    let res;
-    try {
-      res = await fetchJson(`${base}/chat/completions`, { method: 'POST', headers, body: JSON.stringify(body) });
-    } catch (e) {
-      if (e.status === 400 && /response_format|json_object/i.test(e.body || '')) {
-        delete body.response_format;
-        res = await fetchJson(`${base}/chat/completions`, { method: 'POST', headers, body: JSON.stringify(body) });
-      } else {
-        throw e;
+    const send = () => openRequest(`${base}/chat/completions`, { method: 'POST', headers, body: JSON.stringify(body) });
+    let req;
+    for (let attempt = 0; ; attempt++) {
+      try {
+        req = await send();
+        break;
+      } catch (e) {
+        if (attempt > 2) throw e;
+        if (e.status === 400 && body.response_format && /response_format|json_object/i.test(e.body || '')) {
+          delete body.response_format;
+        } else if (e.status === 404 && !/\/v\d+$/.test(base)) {
+          // 地址少写了 /v1（比如 https://api.openai.com）
+          base = `${base}/v1`;
+        } else {
+          throw e;
+        }
       }
     }
-    const content = res && res.choices && res.choices[0] && res.choices[0].message && res.choices[0].message.content;
+    let content;
+    try {
+      content = await readOpenAI(req.res);
+    } finally {
+      req.done();
+    }
     if (!content) throw new Error('模型没有返回内容。');
     return parseLooseJson(content);
   }
@@ -247,5 +351,5 @@ change_note 用中文一句话说改了什么。只输出 JSON。`;
     return !!raw.ok;
   }
 
-  root.XALLM = { analyze, rewrite, ping, parseLooseJson, ANALYSIS_SCHEMA, REWRITE_SCHEMA };
+  root.XALLM = { analyze, rewrite, ping, parseLooseJson, readAnthropic, readOpenAI, ANALYSIS_SCHEMA, REWRITE_SCHEMA };
 })(typeof globalThis !== 'undefined' ? globalThis : self);

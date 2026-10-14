@@ -125,7 +125,8 @@
           <label>批次间休息（分钟） <span><input type="number" id="restMinMin"> 到 <input type="number" id="restMaxMin"></span><em>最低 10 分钟</em></label>
           <label>每天上限 <span><input type="number" id="dailyCap"></span><em>最高 200，建议不超过 100</em></label>
           <label class="check"><input type="checkbox" id="newAccountMode"> 新号或刚解除限制的账号（每天最多 30 个）</label>
-          <label class="check"><input type="checkbox" id="confirmEachBatch"> 每一批开始前都需要我确认</label>
+          <label class="check"><input type="checkbox" id="autoStart"> 加入队列后自动开始取关（不用再点「开始」）</label>
+          <label class="check"><input type="checkbox" id="confirmEachBatch"> 每一批开始前都需要我确认（默认关闭，批次之间会自动接着执行）</label>
           <label class="check"><input type="checkbox" id="dryRun"> 演练模式（只打开主页、找按钮，不真的点击）</label>
         </div>
       </div>

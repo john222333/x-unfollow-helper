@@ -224,13 +224,27 @@
     };
   }
 
-  // X 的计数方式：中日韩字符算 2，其余算 1，上限 280（非会员）。
+  // X 的计数方式（twitter-text v3）：拉丁字母、常用标点算 1，中日韩等其他文字算 2，
+  // 每个 emoji 算 2，链接一律算 23，上限 280（非会员）。
+  const LIGHT_RANGES = [[0x0000, 0x10ff], [0x2000, 0x200d], [0x2010, 0x201f], [0x2032, 0x2037]];
+  const URL_RE = /\b(?:https?:\/\/|www\.)[^\s<>"']+/gi;
+  const EMOJI_RE = /\p{Extended_Pictographic}|\p{Regional_Indicator}/u;
+  const segmenter = typeof Intl !== 'undefined' && Intl.Segmenter ? new Intl.Segmenter(undefined, { granularity: 'grapheme' }) : null;
+
+  function codePointWeight(cp) {
+    return LIGHT_RANGES.some(([lo, hi]) => cp >= lo && cp <= hi) ? 1 : 2;
+  }
+
   function weightedLength(text) {
     let n = 0;
-    for (const ch of String(text)) {
-      n += /[ᄀ-ᇿ⺀-꓏가-힣豈-﫿︰-﹏＀-｠￠-￦]/.test(ch) ? 2 : 1;
+    const rest = String(text || '').normalize('NFC').replace(URL_RE, () => { n += 23; return ' '; });
+    const graphemes = segmenter ? Array.from(segmenter.segment(rest), (g) => g.segment) : Array.from(rest);
+    for (const g of graphemes) {
+      if (EMOJI_RE.test(g)) { n += 2; continue; }
+      for (const ch of g) n += codePointWeight(ch.codePointAt(0));
     }
-    return n;
+    // 替换链接时补的空格不算
+    return n - (String(text || '').match(URL_RE) || []).length;
   }
 
   root.XARules = { analyze, weightedLength, RULES };

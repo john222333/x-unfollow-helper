@@ -18,9 +18,11 @@
       if (gqlUsers.length > 5000) gqlUsers.splice(0, gqlUsers.length - 5000);
     }
   });
+  // 本脚本加载前页面可能已经收到了第一页，让页面脚本把缓存的数据再发一遍。
+  window.postMessage({ source: 'xa-content', op: 'replay' }, window.location.origin);
 
 
-  function showBadge(text) {
+  function showBadge(text, withStop) {
     let el = document.getElementById('xa-collect-badge');
     if (!el) {
       el = document.createElement('div');
@@ -37,6 +39,7 @@
       document.documentElement.appendChild(el);
     }
     el.firstChild.textContent = text;
+    el.lastChild.style.display = withStop === false ? 'none' : '';
   }
 
   function hideBadge() {
@@ -45,6 +48,17 @@
   }
 
   async function collect(runId) {
+    try {
+      await collectLoop(runId);
+    } catch (e) {
+      // 出错也要告诉后台，不然管理页会一直显示「读取中」。
+      collecting = null;
+      hideBadge();
+      await send({ type: 'xa:collect-done', runId, complete: false, seen: 0, reason: `读取出错：${e.message}` }).catch(() => {});
+    }
+  }
+
+  async function collectLoop(runId) {
     collecting = { runId, stop: false };
     const seen = new Set();
     const t0 = Date.now();
@@ -67,19 +81,23 @@
         await send({ type: 'xa:users', users: fresh, runId }).catch(() => {});
       }
       const newCount = fresh.filter((u) => u.source === 'dom').length + fresh.filter((u) => u.source === 'graphql').length;
-      idle = newCount ? 0 : idle + 1;
+      // 窗口被挡住时浏览器不渲染页面，X 也就不加载下一页；这段时间不算「没有新内容」。
+      const hidden = document.visibilityState === 'hidden';
+      if (newCount) idle = 0;
+      else if (!hidden) idle += 1;
       showBadge(`X 助手正在读取关注列表… 已读取 ${seen.size} 个`);
-      if (rounds % 3 === 0) send({ type: 'xa:collect-progress', runId, seen: seen.size }).catch(() => {});
+      if (rounds % 3 === 0 || hidden) send({ type: 'xa:collect-progress', runId, seen: seen.size, hidden }).catch(() => {});
 
       const blocker = D.detectBlocker();
       if (blocker) { reason = `被 X 拦截（${blocker}）`; break; }
       if (D.loadError()) { reason = 'X 加载出错，已停止，可以稍后重试'; break; }
-      if (idle >= 8 && D.nearBottom() && !D.loadingMore()) { complete = true; break; }
+      if (idle >= 8 && !hidden && D.nearBottom() && !D.loadingMore()) { complete = true; break; }
       if (idle >= 20) { reason = '长时间没有新内容，已停止'; break; }
       if (Date.now() - t0 > 40 * 60 * 1000) { reason = '超过 40 分钟，已停止'; break; }
 
       rounds++;
-      window.scrollBy({ top: window.innerHeight * D.rand(0.6, 0.95), behavior: 'smooth' });
+      // 不用平滑滚动：窗口在后台时平滑滚动可能根本不动。
+      window.scrollBy({ top: window.innerHeight * D.rand(0.6, 0.95), behavior: 'instant' });
       await D.sleep(D.rand(1200, 2600));
       if (rounds % 25 === 0) await D.sleep(D.rand(4000, 8000));
     }
@@ -100,7 +118,7 @@
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (!msg || !msg.type) return false;
     if (msg.type === 'xa:whoami') {
-      D.whoami().then((handle) => sendResponse({ handle }));
+      D.whoami().then((r) => sendResponse(r), () => sendResponse({ handle: null }));
       return true;
     }
     if (msg.type === 'xa:collect') {
@@ -118,6 +136,8 @@
       return false;
     }
     if (msg.type === 'xa:act') {
+      const verb = msg.action === 'follow' ? '重新关注' : '取关';
+      showBadge(`X 助手工作窗口：正在${msg.dryRun ? '演练' : ''}${verb} @${msg.handle}。关掉这个窗口会暂停任务`, false);
       D.act(msg).then(sendResponse, (e) => sendResponse({ result: 'error', detail: e.message }));
       return true;
     }

@@ -7,16 +7,32 @@
 
   const WATCH = /\/graphql\/[^/]+\/(Following|Followers|UserByScreenName)\b/;
 
+  // 插件的内容脚本比这里晚加载，先到的数据缓存几份，等它来要时再发一遍。
+  const buffer = [];
+
+  function post(msg) {
+    window.postMessage(msg, window.location.origin);
+  }
+
   function forward(url, text) {
     const m = WATCH.exec(url);
     if (!m) return;
     try {
-      const data = JSON.parse(text);
-      window.postMessage({ source: 'xa-hook', op: m[1], data }, window.location.origin);
+      const msg = { source: 'xa-hook', op: m[1], data: JSON.parse(text) };
+      if (msg.op === 'Following') {
+        buffer.push(msg);
+        if (buffer.length > 5) buffer.shift();
+      }
+      post(msg);
     } catch (e) {
       // 不是 JSON，忽略
     }
   }
+
+  window.addEventListener('message', (ev) => {
+    if (ev.source !== window || !ev.data || ev.data.source !== 'xa-content' || ev.data.op !== 'replay') return;
+    buffer.splice(0).forEach(post);
+  });
 
   const origFetch = window.fetch;
   window.fetch = function (input, init) {

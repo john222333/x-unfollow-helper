@@ -48,11 +48,12 @@
   // 负向行为权重很大，基线总分可能是负数，所以不用比值，而用「普通推文正向得分」作为单位衡量差值。
   const UNIT = BASE.parts.filter((p) => p.contribution > 0).reduce((a, p) => a + p.contribution, 0);
 
-  // 持平普通推文 50 分；正向得分多出一个普通推文的量 +25 分；举报、不感兴趣等负向行为会迅速拉低分数。
+  // 持平普通推文 50 分，越好越接近 100，越差越接近 0。
+  // 用 S 形曲线而不是直接截断：负向行为权重很大，截断的话稍差一点的草稿全是 0 分，几版改写之间就没法比较了。
   function score(probs) {
     const { total, parts } = rawScore(probs);
     const delta = (total - BASELINE) / UNIT;
-    const s = Math.round(Math.max(0, Math.min(100, 50 + 25 * delta)));
+    const s = Math.round(100 / (1 + Math.exp(-delta)));
     parts.sort((a, b) => Math.abs(b.contribution) - Math.abs(a.contribution));
     return { score: s, delta, total, baseline: BASELINE, parts };
   }

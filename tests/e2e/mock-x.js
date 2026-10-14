@@ -38,7 +38,7 @@ function followingPage(cursor) {
 const NAV = '<nav><a data-testid="AppTabBar_Profile_Link" href="/tester">Profile</a></nav>';
 
 function cellHtml(u) {
-  return `<div data-testid="cellInnerDiv"><div data-testid="UserCell" style="height:90px;border-bottom:1px solid #eee">
+  return `<div data-testid="cellInnerDiv"><div data-testid="UserCell" role="button" style="height:90px;border-bottom:1px solid #eee">
     <a href="/${u.handle}" role="link"><img src="https://pbs.twimg.com/profile_images/${u.id}/a_normal.jpg"></a>
     <a href="/${u.handle}" role="link"><span>${u.name}</span></a>
     <a href="/${u.handle}" role="link"><span>@${u.handle}</span></a>

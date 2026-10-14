@@ -6,15 +6,35 @@
   const rand = (lo, hi) => lo + Math.random() * (hi - lo);
   const humanPause = (lo = 400, hi = 1200) => sleep(rand(lo, hi));
 
-  async function waitFor(fn, timeoutMs = 15000, interval = 250) {
-    const deadline = Date.now() + timeoutMs;
-    for (;;) {
-      let v = null;
-      try { v = fn(); } catch { v = null; }
-      if (v) return v;
-      if (Date.now() > deadline) return null;
-      await sleep(interval);
-    }
+  // 等页面出现某个状态。除了定时检查，页面一有变化也立刻检查：
+  // 工作窗口在后台时浏览器会放慢定时器，只靠定时检查可能等很久。
+  function waitFor(fn, timeoutMs = 15000, interval = 250) {
+    return new Promise((resolve) => {
+      let finished = false;
+      let observer = null;
+      let poll = null;
+      let timer = null;
+      const finish = (v) => {
+        if (finished) return;
+        finished = true;
+        if (observer) observer.disconnect();
+        clearInterval(poll);
+        clearTimeout(timer);
+        resolve(v);
+      };
+      const check = () => {
+        if (finished) return;
+        let v = null;
+        try { v = fn(); } catch { v = null; }
+        if (v) finish(v);
+      };
+      check();
+      if (finished) return;
+      observer = new MutationObserver(check);
+      observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-testid'] });
+      poll = setInterval(check, interval);
+      timer = setTimeout(() => { check(); finish(null); }, timeoutMs);
+    });
   }
 
   function primaryColumn() {
@@ -63,9 +83,33 @@
     return /doesn.t exist|suspended|不存在|已被冻结|已被停用|暂停/i.test(primaryColumn().innerText || '');
   }
 
-  async function act({ action, id, dryRun }) {
+  // 当前登录的账号。桌面布局在左侧导航，找不到时返回 null（比如窗口太窄切成了手机布局）。
+  function currentHandle() {
+    const link = document.querySelector('a[data-testid="AppTabBar_Profile_Link"]');
+    if (link) {
+      const m = /^\/([A-Za-z0-9_]{1,15})\/?$/.exec(new URL(link.href, location.origin).pathname);
+      if (m) return m[1];
+    }
+    const sw = document.querySelector('[data-testid="SideNav_AccountSwitcher_Button"]');
+    const m2 = sw && /@([A-Za-z0-9_]{1,15})/.exec(sw.innerText || '');
+    return m2 ? m2[1] : null;
+  }
+
+  function loggedOut() {
+    if (currentHandle()) return false;
+    return !!document.querySelector('[data-testid="loginButton"], [data-testid="signupButton"], a[href="/login"], a[href="/i/flow/login"]');
+  }
+
+  async function act({ action, id, dryRun, me }) {
     const blocker = detectBlocker();
     if (blocker) return { result: blocker };
+
+    // 核对登录的账号，避免在别的账号上取关。
+    const who = await waitFor(() => currentHandle() || (loggedOut() ? '-' : null), 8000);
+    if (who === '-') return { result: 'auth', detail: 'x.com 没有登录' };
+    if (who && me && who.toLowerCase() !== String(me).toLowerCase()) {
+      return { result: 'wrong_account', detail: `现在登录的是 @${who}，关注列表是 @${me} 的` };
+    }
 
     const found = await waitFor(() => {
       const b = headerButton();
@@ -119,10 +163,9 @@
   }
 
   async function whoami() {
-    const link = await waitFor(() => document.querySelector('a[data-testid="AppTabBar_Profile_Link"]'), 15000);
-    if (!link) return null;
-    const m = /^\/([A-Za-z0-9_]{1,15})\/?$/.exec(new URL(link.href, location.origin).pathname);
-    return m ? m[1] : null;
+    const v = await waitFor(() => currentHandle() || (loggedOut() ? '-' : null), 15000);
+    if (v === '-') return { handle: null, loggedOut: true };
+    return { handle: v || null, loggedOut: false };
   }
 
   // ---------- 解析关注列表 ----------
@@ -142,8 +185,13 @@
     const btn = cell.querySelector(FOLLOW_BTN);
     const img = cell.querySelector('img[src*="profile_images"], img[src*="default_profile"]');
     const avatar = img ? img.src : undefined;
+    // 整个 UserCell 本身就是 role="button"，只排除它里面的按钮（关注按钮等）。
+    const inInnerButton = (e) => {
+      const b = e.closest('[role="button"], button');
+      return !!b && b !== cell && cell.contains(b);
+    };
     const texts = Array.from(cell.querySelectorAll('[dir="auto"]'))
-      .filter((e) => !e.closest('a') && !e.closest('[role="button"]') && !e.closest('[data-testid="userFollowIndicator"]'))
+      .filter((e) => !e.closest('a') && !inInnerButton(e) && !e.closest('[data-testid="userFollowIndicator"]'))
       .map((e) => (e.innerText || '').trim())
       .filter(Boolean);
     const state = btn ? buttonState(btn) : null;
@@ -205,7 +253,8 @@
         for (const x of o) walk(x, depth + 1);
         return;
       }
-      if (o.__typename === 'User' && o.rest_id) {
+      // 带 timeline 的 User 是「你自己」这个外层容器，关注的人在它里面，要继续往下找。
+      if (o.__typename === 'User' && o.rest_id && !o.timeline) {
         const u = fromGraphQLUser(o);
         if (u && !seen.has(u.handle.toLowerCase())) {
           seen.add(u.handle.toLowerCase());
@@ -227,9 +276,10 @@
     return !!primaryColumn().querySelector('[role="progressbar"]');
   }
 
+  // 只认 X 的「重试」按钮，不看整页文字：关注的人简介里也可能写着「出错了」。
   function loadError() {
-    const t = primaryColumn().innerText || '';
-    return /Something went wrong|Try reloading|出错了|重试/i.test(t) && !!primaryColumn().querySelector('[role="button"]');
+    return Array.from(primaryColumn().querySelectorAll('[role="button"], button'))
+      .some((b) => !b.closest('[data-testid="UserCell"]') && /^(retry|try again|重试|重新尝试)$/i.test((b.innerText || '').trim()));
   }
 
   // 推文与发推框
@@ -238,11 +288,22 @@
     return el ? el.innerText.trim() : '';
   }
 
+  // 记住最后编辑的输入框：连发推（串推）时一个工具栏对应好几个输入框。
+  const EDITOR = '[data-testid^="tweetTextarea_"][contenteditable="true"], [data-testid^="tweetTextarea_"] [contenteditable="true"]';
+  let lastEditor = null;
+  document.addEventListener('focusin', (e) => {
+    const ed = e.target && e.target.closest && e.target.closest('[contenteditable="true"]');
+    if (ed && ed.matches(EDITOR)) lastEditor = ed;
+  }, true);
+
   function composeEditorFor(toolbar) {
     let node = toolbar;
     for (let i = 0; i < 10 && node; i++) {
-      const ed = node.querySelector && node.querySelector('[data-testid^="tweetTextarea_"][contenteditable="true"], [data-testid^="tweetTextarea_"] [contenteditable="true"]');
-      if (ed) return ed;
+      if (node.querySelector) {
+        if (lastEditor && lastEditor.isConnected && node.contains(lastEditor)) return lastEditor;
+        const ed = node.querySelector(EDITOR);
+        if (ed) return ed;
+      }
       node = node.parentElement;
     }
     return null;
@@ -272,7 +333,7 @@
   }
 
   root.XADom = {
-    sleep, rand, waitFor, act, whoami, visibleUsers, parseGraphQLUsers, detectBlocker,
+    sleep, rand, waitFor, act, whoami, currentHandle, visibleUsers, parseGraphQLUsers, detectBlocker,
     nearBottom, loadingMore, loadError, tweetText, composeEditorFor, replaceEditorText, primaryColumn,
   };
 })(typeof globalThis !== 'undefined' ? globalThis : self);

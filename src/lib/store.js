@@ -12,7 +12,11 @@
     dailyCap: [10, 200],
   };
 
+  // 设置结构的版本。改了默认值、需要迁移老用户已保存的设置时加 1。
+  const SETTINGS_VERSION = 2;
+
   const DEFAULT_SETTINGS = {
+    v: SETTINGS_VERSION,
     pace: {
       minDelaySec: 8,
       maxDelaySec: 20,
@@ -22,7 +26,8 @@
       dailyCap: 100,
     },
     newAccountMode: false, // 新号或刚解除限制：每天最多 30 个
-    confirmEachBatch: true,
+    autoStart: true, // 加入队列后自动开始，不用再去点「开始」
+    confirmEachBatch: false, // 每批开始前是否要手动确认
     dryRun: false, // 演练模式：打开主页、找到按钮，但不点击
     llm: {
       provider: 'anthropic',
@@ -48,8 +53,18 @@
     return out;
   }
 
+  // 老版本保存的设置升级到当前结构。
+  function migrateSettings(s) {
+    const src = { ...(s || {}) };
+    const v = Number(src.v) || 1;
+    // v1 默认每批都要手动确认；v2 起默认自动执行。
+    if (v < 2) src.confirmEachBatch = false;
+    src.v = SETTINGS_VERSION;
+    return src;
+  }
+
   function mergeSettings(s) {
-    const src = s || {};
+    const src = s ? migrateSettings(s) : {};
     return {
       ...DEFAULT_SETTINGS,
       ...src,
@@ -100,6 +115,6 @@
   };
 
   root.XAStore = {
-    LIMITS, DEFAULT_SETTINGS, normalizePace, mergeSettings, effectiveDailyCap, dayKey, userKey, tagsFor, TAG_LABELS,
+    LIMITS, DEFAULT_SETTINGS, SETTINGS_VERSION, normalizePace, mergeSettings, effectiveDailyCap, dayKey, userKey, tagsFor, TAG_LABELS,
   };
 })(typeof globalThis !== 'undefined' ? globalThis : self);

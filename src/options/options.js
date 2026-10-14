@@ -85,7 +85,7 @@
     clearTimeout(renderTimer);
     renderTimer = setTimeout(() => {
       renderHeader();
-      if (changes.users || changes.whitelist) renderUsers();
+      if (changes.users || changes.whitelist || changes.settings) renderUsers();
       if (changes.collect) renderCollect();
       if (changes.job || changes.queue || changes.settings) renderJob();
       if (changes.log) renderLog();
@@ -149,7 +149,7 @@
     $('userSummary').textContent = total
       ? `共 ${total} 人，筛选出 ${list.length} 人，已选 ${selected.size} 人`
       : '还没有数据，先点「读取关注列表」';
-    $('enqueueBtn').textContent = `加入取关队列（${selected.size}）`;
+    $('enqueueBtn').textContent = `${data.settings.autoStart ? '加入队列并开始取关' : '加入取关队列'}（${selected.size}）`;
     $('pageInfo').textContent = `${page + 1} / ${pages}`;
     $('pageAll').checked = slice.length > 0 && slice.every((u) => selected.has(u.key));
     $('userRows').innerHTML = slice.map((u) => {
@@ -209,8 +209,20 @@
     const r = await send({ type: 'xa:enqueue', keys, action: 'unfollow' });
     selected.clear();
     renderUsers();
-    flash($('userSummary'), `已加入 ${r.added} 人${r.skipped ? `，跳过白名单 ${r.skipped} 人` : ''}，队列共 ${r.total} 人。到「取关任务」开始执行。`);
+    flash($('userSummary'), `已加入 ${r.added} 人${r.skipped ? `，跳过白名单 ${r.skipped} 人` : ''}，队列共 ${r.total} 人。${enqueueNote(r)}`);
   });
+
+  // 加入队列后告诉用户任务现在是什么状态、要不要再点什么。
+  function enqueueNote(r) {
+    if (r.started) return data.settings.dryRun ? '已自动开始演练（不会真的点击）。' : '已自动开始，会按设定的节奏执行。';
+    if (r.startError) return `没能自动开始：${r.startError}`;
+    const st = r.status;
+    if (st === 'running' || st === 'awaiting_confirm') return '任务正在进行，会接着往下执行。';
+    if (st === 'daily_cap') return '今天的额度已用完，明天会自动继续。';
+    if (st === 'paused') return '任务目前是暂停状态，到「取关任务」点「继续取关」。';
+    if (st === 'tripped') return '任务因为 X 的限制被暂停了，到「取关任务」查看。';
+    return '到「取关任务」点「开始取关」。';
+  }
 
   function renderCollect() {
     const c = data.collect;
@@ -251,14 +263,19 @@
     err.textContent = job.lastError ? `${job.lastError}${job.status === 'tripped' && job.pausedUntil ? `。建议 ${fmtTime(job.pausedUntil)} 之后再继续。` : ''}` : '';
 
     const btns = [];
-    if (['idle', 'paused'].includes(job.status)) btns.push(`<button class="btn primary" data-do="start" ${data.queue.length ? '' : 'disabled'}>开始取关</button>`);
+    if (['idle', 'paused'].includes(job.status)) {
+      btns.push(`<button class="btn primary" data-do="start" ${data.queue.length ? '' : 'disabled'}>${job.status === 'paused' ? '继续取关' : '开始取关'}</button>`);
+    }
     if (job.status === 'awaiting_confirm') btns.push(`<button class="btn primary" data-do="confirm">确认执行这一批（${job.batch.length} 个）</button>`);
     if (['running', 'awaiting_confirm', 'daily_cap'].includes(job.status)) btns.push('<button class="btn" data-do="pause">暂停</button>');
-    if (job.status === 'tripped') btns.push('<button class="btn danger" data-do="force">仍然继续（不建议）</button>');
+    if (job.status === 'tripped') {
+      if (Date.now() >= (job.pausedUntil || 0)) btns.push('<button class="btn primary" data-do="resume">继续取关</button>');
+      else btns.push('<button class="btn danger" data-do="force">仍然继续（不建议）</button>');
+    }
     $('jobButtons').innerHTML = btns.join('');
 
     const p = s.pace;
-    $('paceSummary').textContent = `当前节奏：每次间隔 ${p.minDelaySec}–${p.maxDelaySec} 秒，每批 ${p.batchSize} 个，批间休息 ${p.restMinMin}–${p.restMaxMin} 分钟，每天最多 ${cap} 个。${s.confirmEachBatch ? '每批开始前需要你确认。' : ''}`;
+    $('paceSummary').textContent = `当前节奏：每次间隔 ${p.minDelaySec}–${p.maxDelaySec} 秒，每批 ${p.batchSize} 个，批间休息 ${p.restMinMin}–${p.restMaxMin} 分钟，每天最多 ${cap} 个。${s.confirmEachBatch ? '每批开始前需要你确认。' : '批次之间自动接着执行，不需要确认。'}${s.dryRun ? '演练模式只跑一批，队列保持不变。' : ''}`;
 
     const byKey = Object.fromEntries(data.queue.map((q) => [q.key, q]));
     $('batchList').innerHTML = job.batch && job.batch.length
@@ -280,6 +297,7 @@
       if (what === 'start') await send({ type: 'xa:start' });
       if (what === 'confirm') await send({ type: 'xa:confirm' });
       if (what === 'pause') await send({ type: 'xa:pause' });
+      if (what === 'resume') await send({ type: 'xa:resume' });
       if (what === 'force') {
         if (!confirm('X 刚刚提示了限制或异常。现在继续，被锁号的风险更高。确定继续吗？')) return;
         await send({ type: 'xa:resume', force: true });
@@ -296,8 +314,13 @@
     await send({ type: 'xa:clearQueue' });
   });
 
+  let trippedWaiting = false;
   setInterval(() => {
     if (data.job && ['running', 'daily_cap'].includes(data.job.status)) $('jobNext').textContent = nextText(data.job);
+    // 熔断冷却时间到了，把「仍然继续」换成普通的「继续取关」。
+    const waiting = !!(data.job && data.job.status === 'tripped' && Date.now() < (data.job.pausedUntil || 0));
+    if (trippedWaiting && !waiting) renderJob();
+    trippedWaiting = waiting;
   }, 1000);
 
   // ---------- 推文体检 ----------
@@ -318,9 +341,11 @@
   // ---------- 日志 ----------
   const OK = new Set(['ok', 'dry_run', 'pending']);
   const SKIP = new Set(['already', 'gone', 'mismatch']);
+  // 日志会滚动删掉最旧的记录，所以选择要用不会变的键，不能用数组下标。
+  const logId = (l) => `${l.t}|${l.key}|${l.action}`;
   function filteredLog() {
     const f = $('logFilter').value;
-    let list = data.log.map((l, i) => ({ ...l, i })).reverse();
+    let list = data.log.map((l) => ({ ...l, id: logId(l) })).reverse();
     if (f === 'ok') list = list.filter((l) => OK.has(l.result));
     if (f === 'fail') list = list.filter((l) => !OK.has(l.result));
     return list;
@@ -332,7 +357,7 @@
     $('logRows').innerHTML = list.slice(0, 500).map((l) => {
       const cls = OK.has(l.result) ? 'res-ok' : SKIP.has(l.result) ? 'res-skip' : 'res-fail';
       const canRefollow = l.result === 'ok' && l.action === 'unfollow';
-      return `<tr data-i="${l.i}"><td>${canRefollow ? `<input type="checkbox" class="lsel" ${logSelected.has(l.i) ? 'checked' : ''}>` : ''}</td>
+      return `<tr data-id="${esc(l.id)}"><td>${canRefollow ? `<input type="checkbox" class="lsel" ${logSelected.has(l.id) ? 'checked' : ''}>` : ''}</td>
         <td class="small">${esc(fmtTime(l.t))}</td>
         <td><a href="https://x.com/${esc(l.handle)}" target="_blank" rel="noopener">@${esc(l.handle)}</a></td>
         <td>${l.action === 'follow' ? '重新关注' : '取关'}${l.dryRun ? '（演练）' : ''}</td>
@@ -342,21 +367,21 @@
   $('logFilter').onchange = renderLog;
   $('logRows').addEventListener('change', (e) => {
     if (!e.target.classList.contains('lsel')) return;
-    const i = Number(e.target.closest('tr').dataset.i);
-    if (e.target.checked) logSelected.add(i); else logSelected.delete(i);
+    const id = e.target.closest('tr').dataset.id;
+    if (e.target.checked) logSelected.add(id); else logSelected.delete(id);
   });
   $('logAll').addEventListener('change', (e) => {
     filteredLog().slice(0, 500).filter((l) => l.result === 'ok' && l.action === 'unfollow')
-      .forEach((l) => (e.target.checked ? logSelected.add(l.i) : logSelected.delete(l.i)));
+      .forEach((l) => (e.target.checked ? logSelected.add(l.id) : logSelected.delete(l.id)));
     renderLog();
   });
   $('refollowBtn').onclick = () => act($('refollowBtn'), async () => {
-    const handles = [...logSelected].map((i) => data.log[i] && data.log[i].handle).filter(Boolean);
+    const handles = data.log.filter((l) => logSelected.has(logId(l))).map((l) => l.handle);
     if (!handles.length) throw new Error('先勾选成功取关的记录。');
     const r = await send({ type: 'xa:enqueue', keys: handles, action: 'follow', front: true });
     logSelected.clear();
     renderLog();
-    alert(`已把 ${r.added} 个重新关注加到队列最前面，会按同样的节奏执行。`);
+    alert(`已把 ${r.added} 个重新关注加到队列最前面，会按同样的节奏执行。${enqueueNote(r)}`);
   });
   $('exportCsv').onclick = () => {
     const head = ['时间', '用户名', '名字', '动作', '结果', '说明', '批次', '演练'];
@@ -366,6 +391,7 @@
   };
   $('clearLog').onclick = async () => {
     if (!confirm('清空所有日志？清空后就不能从日志里重新关注了。')) return;
+    logSelected.clear();
     await chrome.storage.local.set({ log: [] });
   };
 
@@ -408,6 +434,7 @@
     for (const k of Object.keys(S.LIMITS)) $(k).value = s.pace[k];
     $('newAccountMode').checked = !!s.newAccountMode;
     $('confirmEachBatch').checked = !!s.confirmEachBatch;
+    $('autoStart').checked = !!s.autoStart;
     $('dryRun').checked = !!s.dryRun;
     $('provider').value = s.llm.provider;
     $('baseUrl').value = s.llm.baseUrl;
@@ -451,6 +478,7 @@
       pace,
       newAccountMode: $('newAccountMode').checked,
       confirmEachBatch: $('confirmEachBatch').checked,
+      autoStart: $('autoStart').checked,
       dryRun: $('dryRun').checked,
       llm,
       ui: { composeButton: $('composeButton').checked, tweetButtons: $('tweetButtons').checked },
