@@ -321,6 +321,7 @@
     if (job.current) return `正在处理 @${job.current}`;
     const left = Math.max(0, Math.round((job.nextActionAt - now) / 1000));
     if (!job.batch.length) return left > 0 ? `批次休息，${Math.floor(left / 60)} 分 ${left % 60} 秒后准备下一批` : '准备下一批…';
+    if (left >= 120) return `${Math.floor(left / 60)} 分 ${left % 60} 秒后`;
     return left > 0 ? `${left} 秒后` : '马上';
   }
 
@@ -347,6 +348,8 @@
     $('jobNext').textContent = nextText(job);
     const err = $('jobError');
     err.hidden = !job.lastError;
+    // 进行中的提示（比如页面没响应、稍后自动重试）不是错误，用普通提示的颜色。
+    err.className = job.status === 'running' ? 'banner' : 'banner err';
     err.textContent = job.lastError ? `${job.lastError}${job.status === 'tripped' && job.pausedUntil ? `。建议 ${fmtTime(job.pausedUntil)} 之后再继续。` : ''}` : '';
 
     const btns = [];
@@ -437,7 +440,7 @@
 
   // ---------- 日志 ----------
   const OK = new Set(['ok', 'dry_run', 'pending']);
-  const SKIP = new Set(['already', 'gone', 'mismatch']);
+  const SKIP = new Set(['already', 'gone', 'mismatch', 'interrupted']);
   // 日志会滚动删掉最旧的记录，所以选择要用不会变的键，不能用数组下标。
   const logId = (l) => `${l.t}|${l.key}|${l.action}`;
   function filteredLog() {
@@ -543,6 +546,7 @@
     $('autoStart').checked = !!s.autoStart;
     $('dryRun').checked = !!s.dryRun;
     $('execMode').value = s.execMode;
+    $('keepAwake').checked = !!s.keepAwake;
     $('provider').value = s.llm.provider;
     $('baseUrl').value = s.llm.baseUrl;
     $('model').value = s.llm.model;
@@ -588,6 +592,7 @@
       autoStart: $('autoStart').checked,
       dryRun: $('dryRun').checked,
       execMode: $('execMode').value,
+      keepAwake: $('keepAwake').checked,
       llm,
       ui: { composeButton: $('composeButton').checked, tweetButtons: $('tweetButtons').checked },
     });

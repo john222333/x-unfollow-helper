@@ -22,6 +22,7 @@ const MAIN_JS = 'https://abs.twimg.com/responsive-web/client-web/main.test123.js
 const state = {
   following: new Set(USERS.map((u) => u.id)),
   apiBroken: false, // 取关、关注、账号接口返回 404（模拟 X 改了接口）
+  friendshipsDown: false, // 取关、关注请求直接断开（模拟页面那边请求发不出去）
   collectApiBroken: false, // 插件自己发的关注列表请求返回 404（模拟后台读取不可用）
   rateLimitOnce: false, // 下一次读取第二页时返回一次 429
   calls: { destroy: 0, create: 0, following: 0, settings: 0 },
@@ -30,6 +31,7 @@ const state = {
 function reset() {
   state.following = new Set(USERS.map((u) => u.id));
   state.apiBroken = false;
+  state.friendshipsDown = false;
   state.collectApiBroken = false;
   state.rateLimitOnce = false;
   state.calls = { destroy: 0, create: 0, following: 0, settings: 0 };
@@ -192,6 +194,7 @@ async function apiRoute(r, url, p) {
   const fm = /^\/i\/api\/1\.1\/friendships\/(destroy|create)\.json$/.exec(p);
   if (fm && req.method() === 'POST') {
     state.calls[fm[1]]++;
+    if (state.friendshipsDown) return r.abort('failed');
     if (state.apiBroken) return r.fulfill({ status: 404, body: '' });
     const form = new URLSearchParams(req.postData() || '');
     const u = USERS.find((x) => x.id === form.get('user_id'));

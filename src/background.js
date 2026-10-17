@@ -5,8 +5,14 @@ importScripts('lib/store.js', 'lib/rules.js', 'lib/algo.js', 'lib/llm.js', 'lib/
 const S = self.XAStore;
 const TICK_ALARM = 'xa-tick';
 
+// X 明确给出的限制或异常信号：立刻熔断，建议休息 24 小时。
 const TRIP_NOW = new Set(['rate_limited', 'auth', 'locked', 'captcha']);
-const SOFT_FAIL = new Set(['not_applied', 'no_button', 'timeout', 'no_response', 'error']);
+// 插件这边的问题（页面没响应、加载超时、没找到按钮），不是 X 的限制：等一会儿自动重试，不熔断。
+const ENV_FAIL = new Set(['no_button', 'timeout', 'no_response', 'error']);
+// 偶发失败的人放回队尾再试。
+const SOFT_FAIL = new Set(['not_applied', ...ENV_FAIL]);
+const ENV_BACKOFF_MIN = 15; // 连续 3 次页面没响应后等多久再试
+const ENV_PAUSE_AFTER = 9; // 连续这么多次还不行就暂停，等你看一眼
 const RESULT_LABELS = {
   ok: '成功',
   dry_run: '演练（未点击）',
@@ -22,6 +28,7 @@ const RESULT_LABELS = {
   locked: '账号被临时锁定',
   captcha: '出现人机验证',
   not_applied: '点击后状态没有变化',
+  interrupted: '电脑休眠打断了，稍后重做',
   no_button: '没有找到关注按钮',
   timeout: '页面加载超时',
   no_response: '页面没有响应',
@@ -70,6 +77,7 @@ const DEFAULT_JOB = {
   day: S.dayKey(),
   doneToday: 0,
   consecutiveFail: 0,
+  envFail: 0,
   consecutiveAlready: 0,
   lastError: '',
   pausedUntil: 0,
@@ -276,13 +284,21 @@ async function injectIntoOpenTabs() {
   }
 }
 
+const stuckTabs = new Map(); // 最近卡住过的页面 → 到什么时候之前不再借用
+
 // 找一个能执行接口请求的 x.com 页面。allowCreate 为 false 时不会新开标签页。
 async function getContextTab(allowCreate = true) {
   const worker = await getWorker();
   const tabs = await chrome.tabs.query({ url: ['https://x.com/*'] });
   const mine = worker && worker.kind === 'tab' ? worker.tabId : null;
-  const yours = tabs.filter((t) => !t.discarded && !t.frozen && t.id !== mine && !(worker && t.id === worker.tabId));
-  for (const t of yours) {
+  const now = Date.now();
+  for (const [id, until] of stuckTabs) if (until < now) stuckTabs.delete(id);
+  // 正在看的页面不会被浏览器冻结，最可靠；其次是最近用过的。
+  const yours = tabs
+    .filter((t) => !t.discarded && !t.frozen && t.id !== mine && !(worker && t.id === worker.tabId) && !stuckTabs.has(t.id))
+    .sort((a, b) => (b.active - a.active) || ((b.lastAccessed || 0) - (a.lastAccessed || 0)));
+  // 只试前几个：你开着很多 x.com 页面时，挨个等卡住的页面会拖很久。
+  for (const t of yours.slice(0, 4)) {
     if (await pingTab(t.id)) return t.id;
   }
   for (const t of yours.filter((x) => x.status === 'complete').slice(0, 2)) {
@@ -319,7 +335,9 @@ async function apiCall(req) {
         chrome.tabs.sendMessage(tabId, { type: 'xa:api', req: full }),
         sleep(30000).then(() => ({ status: 0, error: 'timeout' })),
       ]);
-      if (r && !(r.error && /network/.test(r.error) && attempt === 0)) return r;
+      // 这个页面卡住了（比如被浏览器冻结），10 分钟内不再借用它，换一个页面再试一次。
+      if (r && r.error === 'timeout') stuckTabs.set(tabId, Date.now() + 10 * 60000);
+      if (r && !(r.error && /network|timeout/.test(r.error) && attempt === 0)) return r;
     } catch {
       // 页面刚被关掉或跳走了，换一个
     }
@@ -694,8 +712,10 @@ async function startJob() {
   job.status = 'running';
   job.batchConfirmed = true;
   job.consecutiveFail = 0;
+  job.envFail = 0;
   job.consecutiveAlready = 0;
   job.lastError = '';
+  job.tripReason = '';
   job.nextActionAt = Math.max(Date.now(), job.nextActionAt || 0);
   await saveJob(job);
   await kick();
@@ -745,6 +765,7 @@ async function resumeJob(force) {
 
 async function trip(job, reason, detail) {
   job.status = 'tripped';
+  job.tripReason = reason;
   job.pausedUntil = Date.now() + 24 * 3600 * 1000;
   job.lastError = `${RESULT_LABELS[reason] || reason}${detail ? `（${String(detail).replace(/[.。\s]+$/, '')}）` : ''}`;
   await saveJob(job);
@@ -806,6 +827,25 @@ async function performUi(item, settings) {
   } catch (e) {
     return { result: 'no_response', detail: e.message };
   }
+}
+
+// 检测执行期间电脑有没有休眠、浏览器有没有被挂起：定时器之间的实际间隔远大于设定值就说明被挂起过。
+function watchSuspend() {
+  const started = Date.now();
+  let last = started;
+  let maxGap = 0;
+  const timer = setInterval(() => {
+    const now = Date.now();
+    maxGap = Math.max(maxGap, now - last);
+    last = now;
+  }, 5000);
+  return () => {
+    clearInterval(timer);
+    const now = Date.now();
+    maxGap = Math.max(maxGap, now - last);
+    // 正常情况下一次操作最多两三分钟；定时器停了一分钟以上，或者整体拖了五分钟以上，都是被挂起了。
+    return maxGap > 60000 || now - started > 5 * 60000;
+  };
 }
 
 let ticking = false;
@@ -898,8 +938,12 @@ async function step() {
   await saveJob(job);
 
   const dryRun = !!settings.dryRun;
+  const stopWatch = watchSuspend();
   const res = await perform(item, settings);
-  const result = res.result || 'error';
+  const suspended = stopWatch();
+  let result = res.result || 'error';
+  // 电脑休眠或浏览器被挂起时，操作会卡住，醒来后才超时返回。这不算失败，原样放回稍后重做。
+  if (ENV_FAIL.has(result) && suspended) result = 'interrupted';
 
   // 执行期间用户可能暂停了，以最新状态为准再写回。
   const latest = await getJob();
@@ -932,6 +976,13 @@ async function step() {
     await saveJob(latest);
     notify('X 助手已暂停取关', latest.lastError);
     await closeWorkerIfIdle();
+    return;
+  }
+
+  if (result === 'interrupted') {
+    // 队列和批次都不动，过一会儿重做这个人。
+    if (latest.status === 'running') latest.nextActionAt = Date.now() + rand(settings.pace.minDelaySec, settings.pace.maxDelaySec) * 1000;
+    await saveJob(latest);
     return;
   }
 
@@ -973,14 +1024,41 @@ async function step() {
     return;
   }
 
-  if (SOFT_FAIL.has(result)) {
+  let backoffUntil = 0;
+  if (ENV_FAIL.has(result)) {
+    // 页面没响应、加载超时：多半是电脑或浏览器的状态问题，不是 X 的限制。等一会儿再试，实在不行再暂停。
+    latest.envFail = (latest.envFail || 0) + 1;
+    if (dryRun && latest.envFail >= 3) {
+      latest.status = 'paused';
+      latest.lastError = `演练中连续 ${latest.envFail} 次失败（${RESULT_LABELS[result] || result}），请确认 Chrome 里能正常打开 x.com，或把日志截图发给开发者。`;
+      await saveJob(latest);
+      await closeWorkerIfIdle();
+      return;
+    }
+    if (latest.envFail >= ENV_PAUSE_AFTER) {
+      latest.status = 'paused';
+      latest.lastError = `x.com 页面连续 ${latest.envFail} 次没有响应，已暂停（这不是 X 的限制）。请确认 Chrome 里能正常打开 x.com，再点「继续取关」。`;
+      await saveJob(latest);
+      notify('X 助手已暂停取关', latest.lastError);
+      await closeWorkerIfIdle();
+      return;
+    }
+    if (latest.envFail % 3 === 0) {
+      backoffUntil = Date.now() + ENV_BACKOFF_MIN * 60000;
+      latest.lastError = `x.com 页面连续 ${latest.envFail} 次没有响应（${RESULT_LABELS[result] || result}），${ENV_BACKOFF_MIN} 分钟后自动重试。这不是 X 的限制。`;
+    }
+  } else {
+    latest.envFail = 0;
+    if (latest.status === 'running') latest.lastError = '';
+  }
+
+  if (result === 'not_applied') {
+    // 点了按钮但状态没变，可能是 X 在悄悄拦截：连续两次就熔断。
     latest.consecutiveFail += 1;
-    const limit = result === 'not_applied' ? 2 : 3;
-    if (latest.consecutiveFail >= limit) {
+    if (latest.consecutiveFail >= 2) {
       if (dryRun) {
-        // 演练没有真的点击，不会触发 X 的限制，用不着冷却 24 小时。
         latest.status = 'paused';
-        latest.lastError = `演练中连续 ${latest.consecutiveFail} 次失败（${RESULT_LABELS[result] || result}），可能是 X 改版了页面，请把日志截图发给开发者。`;
+        latest.lastError = `演练中连续 ${latest.consecutiveFail} 次失败（${RESULT_LABELS[result]}），可能是 X 改版了页面，请把日志截图发给开发者。`;
         await saveJob(latest);
         await closeWorkerIfIdle();
         return;
@@ -988,7 +1066,7 @@ async function step() {
       await trip(latest, result, `连续 ${latest.consecutiveFail} 次失败`);
       return;
     }
-  } else {
+  } else if (!ENV_FAIL.has(result)) {
     latest.consecutiveFail = 0;
   }
 
@@ -1018,9 +1096,10 @@ async function step() {
   } else {
     latest.nextActionAt = Date.now() + rand(p.minDelaySec, p.maxDelaySec) * 1000;
   }
+  if (backoffUntil > latest.nextActionAt) latest.nextActionAt = backoffUntil;
   await saveJob(latest);
-  // 批次结束要休息很久，或者执行期间被暂停了：关掉工作窗口。
-  if (!latest.batch.length || latest.status !== 'running') await closeWorkerIfIdle();
+  // 批次结束或退避要休息很久，或者执行期间被暂停了：关掉后台标签页。
+  if (!latest.batch.length || backoffUntil || latest.status !== 'running') await closeWorkerIfIdle();
 }
 
 async function resumeCollectIfNeeded() {
@@ -1033,11 +1112,26 @@ async function resumeCollectIfNeeded() {
     .catch((e) => console.error('[X 助手] 续读出错', e));
 }
 
+// 任务进行中（包括批次之间的休息）不让电脑自动休眠，不然夜里会被一次次打断。只影响系统休眠，屏幕照常关闭。
+let keptAwake = null;
+function updateKeepAwake(want) {
+  if (keptAwake === want) return;
+  keptAwake = want;
+  try {
+    if (want) chrome.power.requestKeepAwake('system');
+    else chrome.power.releaseKeepAwake();
+  } catch (e) {
+    console.warn('[X 助手] 保持唤醒失败', e);
+  }
+}
+
 async function scheduleNext() {
   const job = await getJob();
   const { collect } = await store.get('collect');
   await updateBadge();
   const collecting = collect && collect.status === 'running' && collect.mode === 'api';
+  const settings = await getSettings();
+  updateKeepAwake(!!settings.keepAwake && (job.status === 'running' || !!(collect && collect.status === 'running')));
   if (job.status === 'running' || job.status === 'daily_cap' || collecting) {
     const delay = Math.max(0, job.nextActionAt - Date.now());
     if (job.status === 'running' && delay < 25000) setTimeout(tick, delay + 100);
@@ -1323,11 +1417,32 @@ chrome.tabs.onRemoved.addListener((tabId, info) => {
   onWorkerClosed((w) => w.kind === 'tab' && w.tabId === tabId).catch(() => {});
 });
 
+// 老版本会因为「页面没有响应」这类插件自己的问题熔断 24 小时。那不是 X 的限制，升级后直接接着跑。
+async function recoverEnvTrip() {
+  const job = await getJob();
+  if (job.status !== 'tripped') return;
+  const envLabels = [...ENV_FAIL].map((r) => RESULT_LABELS[r]);
+  const byEnv = job.tripReason ? ENV_FAIL.has(job.tripReason) : envLabels.some((l) => String(job.lastError || '').startsWith(l));
+  if (!byEnv) return;
+  job.status = 'running';
+  job.pausedUntil = 0;
+  job.consecutiveFail = 0;
+  job.envFail = 0;
+  job.lastError = '';
+  job.tripReason = '';
+  job.batchConfirmed = true;
+  job.nextActionAt = Date.now() + 5000;
+  await saveJob(job);
+}
+
 chrome.runtime.onInstalled.addListener(async (details) => {
   const { settings } = await store.get('settings');
   await store.set({ settings: S.mergeSettings(settings) });
   // 更新后旧的执行环境记录作废：新版本可能修好了接口问题。
-  if (details.reason === 'update') await store.set({ exec: {} });
+  if (details.reason === 'update') {
+    await store.set({ exec: {} });
+    await recoverEnvTrip();
+  }
   if (details.reason === 'install') chrome.runtime.openOptionsPage();
   // 已经打开的 x.com 页面补上新脚本，不用手动刷新。
   await injectIntoOpenTabs().catch(() => {});

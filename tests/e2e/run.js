@@ -124,8 +124,10 @@ const errors = [];
   const get = (k) => opts.evaluate((key) => chrome.storage.local.get(key).then((r) => r[key]), k);
   const send = (msg) => opts.evaluate((m) => chrome.runtime.sendMessage(m), msg);
 
-  // 默认设置：加入队列自动开始、批次之间不用确认、后台接口
+  // 默认设置：加入队列自动开始、批次之间不用确认、后台接口、任务中不让电脑休眠
+  if (await sw.evaluate(() => typeof chrome.power.requestKeepAwake) !== 'function') throw new Error('缺少防休眠权限');
   const defaults = await get('settings');
+  if (!defaults.keepAwake) throw new Error('默认应该开启防休眠');
   if (!defaults.autoStart || defaults.confirmEachBatch) throw new Error('默认应该自动开始、不用每批确认');
   if (defaults.execMode !== 'auto') throw new Error('默认执行方式应该是后台接口');
 
@@ -271,6 +273,25 @@ const errors = [];
   await opts.screenshot({ path: path.join(OUT, 'fallback.png') });
   await send({ type: 'xa:resetExec' });
   mock.state.apiBroken = false;
+
+  // 页面那边请求发不出去：不是 X 的限制，不能熔断 24 小时，而是等一会儿自动重试
+  console.log('▶ 页面没有响应时自动退避');
+  mock.state.friendshipsDown = true;
+  const before = (await get('log')).length;
+  const enq3 = await send({ type: 'xa:enqueue', keys: ['user6', 'user7', 'user8'], action: 'unfollow' });
+  if (!enq3.started) throw new Error(`应该自动开始：${JSON.stringify(enq3)}`);
+  const backed = await until(async () => {
+    const j = await get('job');
+    return j && !j.current && (await get('log')).length >= before + 3 ? j : null;
+  }, 90000, '连续 3 次没有响应');
+  const log8 = (await get('log')).slice(before);
+  console.log('  日志', log8.map((l) => `${l.handle}:${l.result}`).join(' '));
+  console.log('  状态', backed.status, Math.round((backed.nextActionAt - Date.now()) / 60000), '分钟后重试 |', backed.lastError);
+  if (log8.some((l) => l.result !== 'no_response')) throw new Error('应该记成页面没有响应');
+  if (backed.status !== 'running' || backed.nextActionAt - Date.now() < 14 * 60000 || !/自动重试/.test(backed.lastError)) throw new Error('应该等 15 分钟自动重试，而不是熔断');
+  if ((await get('queue')).length !== 3) throw new Error('没响应的人应该还在队列里');
+  await send({ type: 'xa:clearQueue' }); // 清空队列，任务回到空闲
+  mock.state.friendshipsDown = false;
 
   // 8. 后台读取也不可用时，退回到读取窗口滚动列表
   console.log('▶ 兜底：读取窗口');

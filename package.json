@@ -1,6 +1,6 @@
 {
   "name": "x-assistant",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "description": "Chrome 插件：在 x.com 上分批取关，给推文的 AI 味和算法友好度打分",
   "license": "MIT",

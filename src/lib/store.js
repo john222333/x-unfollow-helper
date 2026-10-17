@@ -31,6 +31,7 @@
     dryRun: false, // 演练模式：检查登录和执行通道是否正常，但不真的取关
     // 执行方式：auto = 后台调用 X 网页版接口，不可用时自动改为后台标签页点按钮；ui = 只用后台标签页点按钮
     execMode: 'auto',
+    keepAwake: true, // 取关进行中不让电脑自动休眠（屏幕照常关闭；合上笔记本盖子仍会休眠）
     llm: {
       provider: 'anthropic',
       baseUrl: 'https://api.anthropic.com',
@@ -74,6 +75,7 @@
       llm: { ...DEFAULT_SETTINGS.llm, ...(src.llm || {}) },
       ui: { ...DEFAULT_SETTINGS.ui, ...(src.ui || {}) },
       execMode: src.execMode === 'ui' ? 'ui' : 'auto',
+      keepAwake: src.keepAwake !== false,
     };
   }
 
