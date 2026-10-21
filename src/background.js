@@ -1,6 +1,6 @@
-// Service worker：取关调度、关注列表合并、LLM 调用。
-// 所有节奏控制都在这里做，内容脚本只负责在页面上读取和点击。
-importScripts('lib/store.js', 'lib/rules.js', 'lib/algo.js', 'lib/llm.js', 'lib/xapi.js');
+// Service worker：执行环境、取关调度、关注列表读取与合并。
+// 所有节奏控制都在这里做，内容脚本只负责在 x.com 页面里发请求或点按钮。
+importScripts('lib/store.js', 'lib/xapi.js');
 
 const S = self.XAStore;
 const TICK_ALARM = 'xa-tick';
@@ -121,13 +121,13 @@ async function updateBadge() {
   await chrome.action.setBadgeBackgroundColor({ color });
   // 鼠标停在插件图标上时显示一句话状态。
   const titles = {
-    running: `X 助手：后台取关中，今天已处理 ${job.doneToday} 个`,
-    awaiting_confirm: 'X 助手：下一批等你确认',
-    tripped: `X 助手：已自动暂停（${job.lastError || 'X 的限制'}）`,
-    daily_cap: 'X 助手：今天的额度用完了，明天自动继续',
-    paused: 'X 助手：取关已暂停',
+    running: `X 取关助手：后台取关中，今天已处理 ${job.doneToday} 个`,
+    awaiting_confirm: 'X 取关助手：下一批等你确认',
+    tripped: `X 取关助手：已自动暂停（${job.lastError || 'X 的限制'}）`,
+    daily_cap: 'X 取关助手：今天的额度用完了，明天自动继续',
+    paused: 'X 取关助手：取关已暂停',
   };
-  await chrome.action.setTitle({ title: titles[job.status] || 'X 助手' });
+  await chrome.action.setTitle({ title: titles[job.status] || 'X 取关助手' });
 }
 
 async function appendLog(entries) {
@@ -143,7 +143,7 @@ async function appendLog(entries) {
 // 3. 接口不可用时（比如 X 改了接口），自动改成在这个后台标签页里打开主页点按钮。
 // 只有「后台读取关注列表」也失败时，才会退回到打开一个读取窗口滚动列表（读取列表必须让页面可见）。
 
-const CONTENT_FILES = ['src/lib/store.js', 'src/lib/rules.js', 'src/lib/algo.js', 'src/lib/xapi.js', 'src/lib/panel.js', 'src/content/x-dom.js', 'src/content/content.js'];
+const CONTENT_FILES = ['src/lib/xapi.js', 'src/lib/msg.js', 'src/content/x-dom.js', 'src/content/content.js'];
 const API_RETRY_MS = 24 * 3600 * 1000;
 
 async function getWorker() {
@@ -443,10 +443,35 @@ async function startCollect() {
   const runId = `run-${Date.now()}`;
   await store.set({ collect: { status: 'running', mode: 'api', runId, startedAt: Date.now(), lastProgressAt: Date.now(), count: 0, seen: 0, message: '正在后台读取…' } });
   // 不等读取结束就返回，管理页通过存储的进度更新界面。
-  collectViaApi(runId).catch((e) => console.error('[X 助手] 读取出错', e));
+  collectViaApi(runId).catch((e) => console.error('[X 取关助手] 读取出错', e));
+  // 开定时闹钟：service worker 中途被浏览器回收时能接着读，读取期间也不让电脑休眠。
+  await kick();
 }
 
 const collectErr = (message, fallback) => Object.assign(new Error(message), { fallback: !!fallback });
+
+// 关注列表的主人是不是这个账号。两边都有账号 ID 时比 ID，否则比用户名。
+function sameAccount(owner, handle, userId) {
+  if (!owner) return false;
+  if (owner.userId && userId) return String(owner.userId) === String(userId);
+  return !!(owner.handle && handle && owner.handle.toLowerCase() === String(handle).toLowerCase());
+}
+
+// 开始读取前确认列表主人。换了账号读取时，原来账号的取关队列不能带到新账号上：队列不空就不读；
+// 队列是空的就清掉原来账号的列表，换成新账号的。
+async function claimOwner(handle, userId) {
+  const { owner, queue } = await store.get(['owner', 'queue']);
+  const same = sameAccount(owner, handle, userId);
+  if (owner && owner.handle && !same) {
+    if (Array.isArray(queue) && queue.length) {
+      throw collectErr(`取关队列里是 @${owner.handle} 关注的人，现在 x.com 登录的是 @${handle}。请在 x.com 切回 @${owner.handle}，或者先在「取关任务」里清空队列再读取。`);
+    }
+    // 原来账号的日志不能拿来判断新账号的「取关未生效」，所以从现在开始算。
+    await withLock(() => store.set({ users: {}, lastFullRead: Date.now() }));
+  }
+  const id = userId ? String(userId) : (same && owner.userId) || null;
+  await store.set({ owner: { handle, userId: id, at: Date.now() } });
+}
 
 // 找到 Following 这个 GraphQL 操作的 queryId 和参数：页面上记下来的优先，没有就从 X 的前端代码里找。
 async function getFollowingOp(scripts, refresh) {
@@ -485,7 +510,8 @@ const saveXmeta = (patch) => withLock(async () => {
   await store.set({ xmeta: next });
 });
 
-let apiCollectRunning = false;
+// 正在这个 service worker 里跑的后台读取。按 runId 记：停止后马上重新读取时，旧的那轮还没退出，新的一轮也要能开始。
+const apiCollectRuns = new Set();
 
 const setCollect = (patch) => withCollectLock(async () => {
   const { collect } = await store.get('collect');
@@ -497,24 +523,29 @@ const setCollect = (patch) => withCollectLock(async () => {
 // 后台读取关注列表：在 x.com 页面里一页页调用 Following 接口，不需要滚动页面。
 // 被 X 限制频率时记下位置，等限制解除后自动接着读。
 async function collectViaApi(runId, resume) {
-  if (apiCollectRunning) return;
-  apiCollectRunning = true;
+  if (apiCollectRuns.has(runId)) return;
+  apiCollectRuns.add(runId);
   try {
     const acct = await currentAccount(true);
     if (acct.loggedOut) throw collectErr('x.com 没有登录，请先在 Chrome 里登录 x.com。');
     const { me } = await store.get('me');
     const handle = acct.handle || (resume && resume.handle) || (me && me.handle);
     if (!handle) throw collectErr('没有检测到已登录的账号，请先在 Chrome 里打开并登录 x.com。');
-    const userId = acct.userId || (resume && resume.userId);
+    if (resume && resume.userId && acct.userId && acct.userId !== resume.userId) {
+      throw collectErr(`读取期间 x.com 上登录的账号变了（现在是 @${acct.handle || acct.userId}），已停止。切回原来的账号后可以重新读取。`);
+    }
+    const userId = (resume && resume.userId) || acct.userId;
     if (!userId) throw collectErr('没拿到账号 ID', true);
     // owner 记的是「这份关注列表属于谁」；me 会随你打开的任何 x.com 页面更新，不能拿来核对。
-    await store.set({ owner: { handle, at: Date.now() } });
+    if (!resume) await claimOwner(handle, userId);
     let op = await getFollowingOp(acct.scripts);
     if (!op) throw collectErr('没找到读取接口', true);
 
     let cursor = (resume && resume.cursor) || null;
     let seen = (resume && resume.seen) || 0;
     let pages = 0;
+    let emptyPages = 0;
+    let pageRetries = 0;
     let refreshed = false;
     await setCollect({ runId, handle, userId, message: seen ? `已读取 ${seen} 个，继续读取…` : '正在后台读取…', waitingUntil: 0, lastProgressAt: Date.now() });
 
@@ -526,7 +557,11 @@ async function collectViaApi(runId, resume) {
         return;
       }
       const xmeta = await getXmeta();
-      const r = await apiCall(self.XAPI.followingRequest(op, userId, cursor, xmeta.features));
+      const r = await apiCall({ ...self.XAPI.followingRequest(op, userId, cursor, xmeta.features), expectUserId: userId });
+      if (r && r.error === 'wrong_account') {
+        await finishCollectLocked({ runId, complete: false, seen, reason: '读取期间 x.com 上登录的账号变了，已停止。切回原来的账号后可以重新读取' });
+        return;
+      }
       const rate = (r && r.rate) || {};
       if (r && r.status === 429) {
         const until = Number(rate.reset) ? Number(rate.reset) * 1000 + 5000 : Date.now() + 15 * 60 * 1000;
@@ -546,13 +581,31 @@ async function collectViaApi(runId, resume) {
         await finishCollectLocked({ runId, complete: false, seen, reason: `读取到 ${seen} 个时出错（${r ? r.status || r.error : '无响应'}），已保存，可以稍后重新读取` });
         return;
       }
-      const users = self.XAPI.parseGraphQLUsers(r.json).filter((u) => u.youFollow !== false);
+      const all = self.XAPI.parseGraphQLUsers(r.json);
       const next = self.XAPI.bottomCursor(r.json);
+      // X 偶尔返回「部分出错」的一页：带 errors、没有用户或没有下一页游标，甚至没有时间线。
+      // 这种页面不能当作「列表读完了」，否则没读到的人会被当成已不再关注而删掉。先重试，还不行就按没读完处理。
+      const broken = !self.XAPI.hasTimeline(r.json) || (Array.isArray(r.json.errors) && r.json.errors.length && (!all.length || !next));
+      if (broken) {
+        if (pageRetries < 2) {
+          pageRetries += 1;
+          await sleep(rand(3000, 6000));
+          continue;
+        }
+        if (pages === 0 && !seen) throw collectErr('接口返回的数据不完整', true);
+        const why = (r.json.errors && r.json.errors[0] && r.json.errors[0].message) || '数据不完整';
+        await finishCollectLocked({ runId, complete: false, seen, reason: `读取到 ${seen} 个时 X 返回出错（${why}），已保存，可以稍后重新读取` });
+        return;
+      }
+      pageRetries = 0;
+      const users = all.filter((u) => u.youFollow !== false);
       if (users.length) await mergeUsers(users, runId);
       seen += users.length;
       pages += 1;
+      // X 偶尔会在中途返回一页空数据，连续两页都空才算读完，避免把没读到的人当成「已不再关注」。
+      emptyPages = all.length ? 0 : emptyPages + 1;
       await setCollect({ runId, cursor: next, seen, lastProgressAt: Date.now(), message: `已读取 ${seen} 个` });
-      if (!users.length || !next || next === cursor) {
+      if (!next || next === cursor || emptyPages >= 2) {
         await finishCollectLocked({ runId, complete: true, seen });
         return;
       }
@@ -570,7 +623,7 @@ async function collectViaApi(runId, resume) {
   } catch (e) {
     if (e.fallback) {
       // 后台读取用不了，改成打开读取窗口滚动列表。
-      apiCollectRunning = false;
+      apiCollectRuns.delete(runId);
       await collectViaWindow(runId, e.message);
       return;
     }
@@ -580,7 +633,7 @@ async function collectViaApi(runId, resume) {
     });
     await closeWorkerIfIdle();
   } finally {
-    apiCollectRunning = false;
+    apiCollectRuns.delete(runId);
   }
 }
 
@@ -594,7 +647,9 @@ async function collectViaWindow(runId, why) {
     const { me } = await store.get('me');
     const handle = (who && who.handle) || (me && me.handle);
     if (!handle) throw new Error('没有检测到已登录的账号，请先在 Chrome 里打开并登录 x.com。');
-    await store.set({ me: { handle, at: Date.now() }, owner: { handle, at: Date.now() } });
+    const info = await sendToTab(tabId, { type: 'xa:pageInfo' }, 10000).catch(() => null);
+    await claimOwner(handle, info && info.userId);
+    await store.set({ me: { handle, at: Date.now() } });
     tabId = await openInWorker(`https://x.com/${handle}/following`, { visible: true });
     const r = await sendToTab(tabId, { type: 'xa:collect', runId }, 15000);
     if (!r || !r.started) throw new Error('页面没有开始读取，请刷新后重试。');
@@ -617,33 +672,63 @@ async function finishCollect(msg) {
   if (!collect || collect.runId !== msg.runId) return;
   let removed = 0;
   let pruneSkipped = false;
+  let stillFollowing = 0;
   if (msg.complete && msg.seen > 0) {
-    // 本次完整读取中没出现的人，说明你已经不再关注他们了。
     await withLock(async () => {
-      const { users } = await store.get('users');
+      const { users, log, lastFullRead } = await store.get(['users', 'log', 'lastFullRead']);
       const map = users || {};
+      const total = Object.keys(map).length;
+      // 本次完整读取中没出现的人，说明你已经不再关注他们了（在别处取关的、或者取关时页面没响应但其实已经成功的）。
       const stale = Object.keys(map).filter((k) => map[k].runId !== msg.runId);
-      // 一次要删掉两成以上，更可能是列表没加载全，这时保留旧记录。
-      if (stale.length > 20 && stale.length > Object.keys(map).length * 0.2) {
+      // 一次要删掉很多人，更可能是这次没读全，先保留旧记录。后台接口是一页页读到底的，比滚动页面可靠，门槛放宽到一半。
+      const guard = collect.mode === 'window' ? { n: 20, ratio: 0.2 } : { n: 50, ratio: 0.5 };
+      if (stale.length > guard.n && stale.length > total * guard.ratio) {
         pruneSkipped = true;
-        return;
+      } else {
+        for (const k of stale) delete map[k];
+        removed = stale.length;
       }
-      for (const k of stale) delete map[k];
-      removed = stale.length;
-      await store.set({ users: map });
+      // 日志里显示取关成功、这次读取时 X 上却还在关注的人：标出来，方便重新加入队列。
+      // 只看这次读到的人，只看上一次完整读取之后、最近 7 天内的取关：更早取关、后来你自己又关注回去的人不算。
+      const seenNow = Object.fromEntries(Object.entries(map).filter(([, u]) => u.runId === msg.runId));
+      // 上次已经标出来、之后也没有新操作的人继续保留标记。
+      const since = Math.max(lastFullRead || 0, Date.now() - 7 * 24 * 3600 * 1000);
+      const notApplied = S.unfollowsNotApplied(log, seenNow, collect.startedAt || Date.now(), 0);
+      const failed = {};
+      for (const [k, t] of Object.entries(notApplied)) {
+        if (t >= since || map[k].unfollowFailed === t) failed[k] = t;
+      }
+      for (const [k, u] of Object.entries(map)) {
+        if (failed[k]) {
+          u.unfollowFailed = failed[k];
+          stillFollowing += 1;
+        } else if (u.unfollowFailed) {
+          delete u.unfollowFailed;
+        }
+      }
+      const patch = { users: map };
+      if (!pruneSkipped) patch.lastFullRead = collect.startedAt || Date.now();
+      await store.set(patch);
     });
   }
   const { users } = await store.get('users');
+  const count = Object.keys(users || {}).length;
+  const parts = [];
+  if (msg.complete) {
+    parts.push(`读取完成，X 上你正在关注 ${count} 人`);
+    if (removed) parts.push(`移除了 ${removed} 个已经不再关注的人`);
+    if (pruneSkipped) parts.push('这次读到的人比上次少很多，可能没读全，旧记录先保留，可以稍后再读一次');
+    if (stillFollowing) parts.push(`有 ${stillFollowing} 人日志里显示已取关，但 X 上仍在关注`);
+  }
   await store.set({
     collect: {
       ...collect,
       status: msg.complete ? 'done' : 'stopped',
       finishedAt: Date.now(),
-      count: Object.keys(users || {}).length,
+      count,
       removed,
-      message: msg.complete
-        ? (pruneSkipped ? '读取完成（这次读到的人比上次少很多，可能没加载全，旧记录先保留）' : '读取完成')
-        : (msg.reason || '已停止'),
+      stillFollowing,
+      message: msg.complete ? parts.join('；') : (msg.reason || '已停止'),
     },
   });
   await closeWorkerIfIdle();
@@ -716,7 +801,11 @@ async function startJob() {
   job.consecutiveAlready = 0;
   job.lastError = '';
   job.tripReason = '';
-  job.nextActionAt = Math.max(Date.now(), job.nextActionAt || 0);
+  // 你点了开始（或加入队列自动开始）：不再沿用上一轮留下的批次休息、退避计时，
+  // 不然清空队列再加人时会莫名其妙地等十几分钟。但和上一次操作至少隔开最短间隔。
+  const { log } = await store.get('log');
+  const lastT = Array.isArray(log) && log.length ? Number(log[log.length - 1].t) || 0 : 0;
+  job.nextActionAt = Math.max(Date.now(), lastT + settings.pace.minDelaySec * 1000);
   await saveJob(job);
   await kick();
 }
@@ -769,7 +858,7 @@ async function trip(job, reason, detail) {
   job.pausedUntil = Date.now() + 24 * 3600 * 1000;
   job.lastError = `${RESULT_LABELS[reason] || reason}${detail ? `（${String(detail).replace(/[.。\s]+$/, '')}）` : ''}`;
   await saveJob(job);
-  notify('X 助手已自动暂停取关', `${job.lastError}。建议休息 24 小时后再继续。`);
+  notify('X 取关助手已自动暂停取关', `${job.lastError}。建议休息 24 小时后再继续。`);
   await closeWorkerIfIdle();
 }
 
@@ -793,24 +882,41 @@ async function perform(item, settings) {
 async function performApi(item, settings) {
   const { owner, me } = await store.get(['owner', 'me']);
   const expected = (owner && owner.handle) || (me && me.handle);
-  const acct = await currentAccount();
+  let expectUserId = owner && owner.userId;
+  // 知道列表主人的账号 ID 时，页面会在每次请求前用 cookie 核对，不怕你中途切换账号；老数据没有 ID，就每次重新确认。
+  const acct = await currentAccount(!expectUserId);
   if (acct.loggedOut) return { result: 'logged_out' };
   if (acct.handle && expected && acct.handle.toLowerCase() !== expected.toLowerCase()) {
     accountCache = null; // 下次重新确认
     return { result: 'wrong_account', detail: `现在登录的是 @${acct.handle}，关注列表是 @${expected} 的` };
   }
+  if (!expectUserId && owner && acct.userId && acct.handle && sameAccount(owner, acct.handle)) {
+    expectUserId = acct.userId;
+    await store.set({ owner: { ...owner, userId: acct.userId } });
+  }
+  const wrongAccount = { result: 'wrong_account', detail: `x.com 上现在登录的不是 @${expected}` };
   if (settings.dryRun) {
     // 演练：只做一次只读请求，确认接口和登录状态都正常，不动关注关系。
-    const c = self.XAPI.classifyFriendship('unfollow', await apiCall(self.XAPI.settingsRequest()));
+    const dry = await apiCall({ ...self.XAPI.settingsRequest(), expectUserId });
+    if (dry && dry.error === 'wrong_account') { accountCache = null; return wrongAccount; }
+    const c = self.XAPI.classifyFriendship('unfollow', dry);
     return c.result === 'ok' ? { result: 'dry_run', detail: '后台接口可用' } : c;
   }
-  const r = await apiCall(self.XAPI.friendshipRequest(item.action, item.id));
-  return self.XAPI.classifyFriendship(item.action, r);
+  const r = await apiCall({ ...self.XAPI.friendshipRequest(item.action, item.id), expectUserId });
+  if (r && r.error === 'wrong_account') { accountCache = null; return wrongAccount; }
+  const c = self.XAPI.classifyFriendship(item.action, r);
+  // X 返回的是被操作的那个人，ID 对不上说明出了问题，不能记成成功。
+  const gotId = r && r.json && (r.json.id_str || (r.json.id != null ? String(r.json.id) : ''));
+  if (['ok', 'pending'].includes(c.result) && gotId && gotId !== String(item.id)) {
+    return { result: 'mismatch', detail: `X 返回的账号 ID 是 ${gotId}，队列里是 ${item.id}` };
+  }
+  return c;
 }
 
 async function performUi(item, settings) {
   const { owner, me } = await store.get(['owner', 'me']);
   const expected = (owner && owner.handle) || (me && me.handle);
+  const expectUserId = (owner && owner.userId) || null;
   let tabId;
   try {
     tabId = await openInWorker(`https://x.com/${encodeURIComponent(item.handle)}`);
@@ -820,7 +926,7 @@ async function performUi(item, settings) {
   try {
     const res = await sendToTab(
       tabId,
-      { type: 'xa:act', action: item.action, handle: item.handle, id: item.id, dryRun: settings.dryRun, me: expected },
+      { type: 'xa:act', action: item.action, handle: item.handle, id: item.id, dryRun: settings.dryRun, me: expected, expectUserId },
       60000,
     );
     return res || { result: 'no_response' };
@@ -857,7 +963,7 @@ async function tick() {
     await resumeCollectIfNeeded();
     await step();
   } catch (e) {
-    console.error('[X 助手] tick 出错', e);
+    console.error('[X 取关助手] tick 出错', e);
   } finally {
     ticking = false;
     await scheduleNext();
@@ -865,6 +971,9 @@ async function tick() {
 }
 
 async function step() {
+  // 读取关注列表期间不取关：读到一半时取关的人会被读回列表里。
+  const collect = await getCollect();
+  if (collect && collect.status === 'running') return;
   const settings = await getSettings();
   const job = await getJob();
   const now = Date.now();
@@ -884,7 +993,7 @@ async function step() {
     if (!job.batch.length) prepareBatch(job, queue, settings);
     job.batchConfirmed = !settings.confirmEachBatch;
     await saveJob(job);
-    if (settings.confirmEachBatch) notify('X 助手：新的一天', '今天的取关额度已恢复，确认后开始下一批。');
+    if (settings.confirmEachBatch) notify('X 取关助手：新的一天', '今天的取关额度已恢复，确认后开始下一批。');
     return;
   }
   if (job.status !== 'running') return;
@@ -894,7 +1003,7 @@ async function step() {
     job.status = 'daily_cap';
     job.nextActionAt = nextDayStart() + rand(5, 60) * 60000;
     await saveJob(job);
-    notify('X 助手：今日额度已用完', `今天取关了 ${job.doneToday} 个，明天继续。`);
+    notify('X 取关助手：今日额度已用完', `今天取关了 ${job.doneToday} 个，明天继续。`);
     await closeWorkerIfIdle();
     return;
   }
@@ -904,7 +1013,7 @@ async function step() {
     if (!queue.length) {
       job.status = 'idle';
       await saveJob(job);
-      notify('X 助手：队列已完成', `今天共处理 ${job.doneToday} 个。`);
+      notify('X 取关助手：队列已完成', `今天共处理 ${job.doneToday} 个。`);
       await closeWorkerIfIdle();
       return;
     }
@@ -912,7 +1021,7 @@ async function step() {
     if (settings.confirmEachBatch) {
       job.status = 'awaiting_confirm';
       await saveJob(job);
-      notify('X 助手：下一批已就绪', `共 ${job.batch.length} 个，打开管理页确认后开始。`);
+      notify('X 取关助手：下一批已就绪', `共 ${job.batch.length} 个，打开管理页确认后开始。`);
       await closeWorkerIfIdle();
       return;
     }
@@ -945,9 +1054,6 @@ async function step() {
   // 电脑休眠或浏览器被挂起时，操作会卡住，醒来后才超时返回。这不算失败，原样放回稍后重做。
   if (ENV_FAIL.has(result) && suspended) result = 'interrupted';
 
-  // 执行期间用户可能暂停了，以最新状态为准再写回。
-  const latest = await getJob();
-  latest.current = null;
   await appendLog([{
     t: Date.now(),
     key: item.key,
@@ -958,9 +1064,12 @@ async function step() {
     result,
     label: RESULT_LABELS[result] || result,
     detail: res.detail || '',
-    batchNo: latest.batchNo,
+    batchNo: job.batchNo,
     dryRun,
   }]);
+  // 执行期间你可能暂停了或清空了队列：以最新状态为准再写回。
+  let latest = await getJob();
+  latest.current = null;
 
   if (TRIP_NOW.has(result)) {
     await trip(latest, result, res.detail);
@@ -974,7 +1083,7 @@ async function step() {
       ? 'x.com 没有登录。请在 Chrome 里登录 x.com 后点「继续取关」。'
       : `${res.detail || '登录的账号和关注列表不一致'}。请在 x.com 切换到正确的账号后点「继续取关」。`;
     await saveJob(latest);
-    notify('X 助手已暂停取关', latest.lastError);
+    notify('X 取关助手已暂停取关', latest.lastError);
     await closeWorkerIfIdle();
     return;
   }
@@ -985,8 +1094,6 @@ async function step() {
     await saveJob(latest);
     return;
   }
-
-  latest.batch = latest.batch.filter((k) => k !== item.key);
 
   // 演练不改动队列：演练完一批就停下，关掉演练模式后同一批人还在队列里。
   if (!dryRun) {
@@ -1001,8 +1108,8 @@ async function step() {
     });
   }
 
-  if (result === 'ok') latest.doneToday += 1;
-  if (!dryRun && item.action === 'unfollow' && result === 'ok') {
+  // 取关成功、本来就没在关注、账号已不存在：这些人都不在你的关注列表里了，从本地列表移除。
+  if (!dryRun && item.action === 'unfollow' && ['ok', 'already', 'gone'].includes(result)) {
     await withLock(async () => {
       const { users } = await store.get('users');
       if (users && users[item.key]) {
@@ -1012,6 +1119,12 @@ async function step() {
     });
   }
 
+  // 上面等锁期间你可能又暂停或清空了队列，再读一次最新状态。
+  latest = await getJob();
+  latest.current = null;
+  latest.batch = latest.batch.filter((k) => k !== item.key);
+  if (result === 'ok') latest.doneToday += 1;
+
   // 连续很多人都显示「没在关注」，多半是登录的账号不对或列表过期了，先停下来。
   latest.consecutiveAlready = result === 'already' ? (latest.consecutiveAlready || 0) + 1 : 0;
   if (latest.consecutiveAlready >= 5 && latest.status === 'running') {
@@ -1019,7 +1132,7 @@ async function step() {
     latest.consecutiveAlready = 0;
     latest.lastError = '连续 5 个人都显示你没有关注他们。请确认 x.com 登录的是你要整理的账号，必要时重新读取关注列表，再继续。';
     await saveJob(latest);
-    notify('X 助手已暂停取关', latest.lastError);
+    notify('X 取关助手已暂停取关', latest.lastError);
     await closeWorkerIfIdle();
     return;
   }
@@ -1039,7 +1152,7 @@ async function step() {
       latest.status = 'paused';
       latest.lastError = `x.com 页面连续 ${latest.envFail} 次没有响应，已暂停（这不是 X 的限制）。请确认 Chrome 里能正常打开 x.com，再点「继续取关」。`;
       await saveJob(latest);
-      notify('X 助手已暂停取关', latest.lastError);
+      notify('X 取关助手已暂停取关', latest.lastError);
       await closeWorkerIfIdle();
       return;
     }
@@ -1077,7 +1190,7 @@ async function step() {
       if (latest.status === 'running') {
         latest.status = 'idle';
         latest.lastError = '';
-        notify('X 助手：演练完成', '队列保持不变。到「日志」看结果，没问题就关掉演练模式再开始。');
+        notify('X 取关助手：演练完成', '队列保持不变。到「日志」看结果，没问题就关掉演练模式再开始。');
       }
       await saveJob(latest);
       await closeWorkerIfIdle();
@@ -1088,7 +1201,7 @@ async function step() {
       latest.status = 'idle';
       latest.lastError = '';
       await saveJob(latest);
-      notify('X 助手：队列已完成', `今天共处理 ${latest.doneToday} 个。`);
+      notify('X 取关助手：队列已完成', `今天共处理 ${latest.doneToday} 个。`);
       await closeWorkerIfIdle();
       return;
     }
@@ -1103,13 +1216,13 @@ async function step() {
 }
 
 async function resumeCollectIfNeeded() {
-  if (apiCollectRunning) return;
   const { collect } = await store.get('collect');
   if (!collect || collect.status !== 'running' || collect.mode !== 'api') return;
+  if (apiCollectRuns.has(collect.runId)) return;
   if (collect.waitingUntil && Date.now() < collect.waitingUntil) return;
   // 频率限制解除了，或者上次读取被浏览器中断了：从记下的位置接着读。
   collectViaApi(collect.runId, { cursor: collect.cursor, seen: collect.seen || 0, handle: collect.handle, userId: collect.userId })
-    .catch((e) => console.error('[X 助手] 续读出错', e));
+    .catch((e) => console.error('[X 取关助手] 续读出错', e));
 }
 
 // 任务进行中（包括批次之间的休息）不让电脑自动休眠，不然夜里会被一次次打断。只影响系统休眠，屏幕照常关闭。
@@ -1121,7 +1234,7 @@ function updateKeepAwake(want) {
     if (want) chrome.power.requestKeepAwake('system');
     else chrome.power.releaseKeepAwake();
   } catch (e) {
-    console.warn('[X 助手] 保持唤醒失败', e);
+    console.warn('[X 取关助手] 保持唤醒失败', e);
   }
 }
 
@@ -1148,70 +1261,6 @@ async function scheduleNext() {
 async function kick() {
   await scheduleNext();
   setTimeout(tick, 50);
-}
-
-// ---------- 推文体检 ----------
-
-function hashText(s) {
-  let h = 5381;
-  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
-  return (h >>> 0).toString(36);
-}
-
-// 等模型回复时 service worker 没有别的事件，30 秒后可能被浏览器结束；定时调一个扩展接口让它保持运行。
-async function keepAlive(fn) {
-  const timer = setInterval(() => { chrome.runtime.getPlatformInfo().catch(() => {}); }, 20000);
-  try {
-    return await fn();
-  } finally {
-    clearInterval(timer);
-  }
-}
-
-function llmConfigured(cfg) {
-  if (!cfg || !cfg.model) return false;
-  if (cfg.provider === 'anthropic') return !!cfg.apiKey;
-  return !!cfg.baseUrl;
-}
-
-async function cached(kind, text, cfg, fn) {
-  const key = `${kind}:${cfg.provider}:${cfg.model}:${hashText(text)}`;
-  const { cache } = await store.get('cache');
-  const map = cache || {};
-  if (map[key]) return map[key].v;
-  const v = await fn();
-  map[key] = { t: Date.now(), v };
-  const entries = Object.entries(map).sort((a, b) => b[1].t - a[1].t).slice(0, 200);
-  await store.set({ cache: Object.fromEntries(entries) });
-  return v;
-}
-
-async function analyzeTweet(text, useLLM) {
-  const clean = String(text || '').trim();
-  if (!clean) throw new Error('没有读取到推文内容。');
-  const settings = await getSettings();
-  const rules = self.XARules.analyze(clean);
-  const local = self.XAAlgo.localChecks(clean);
-  const configured = llmConfigured(settings.llm);
-  let llm = null;
-  let llmError = '';
-  if (useLLM !== false && configured) {
-    try {
-      llm = await cached('analyze', clean, settings.llm, () => keepAlive(() => self.XALLM.analyze(settings.llm, clean)));
-    } catch (e) {
-      llmError = e.message;
-    }
-  }
-  const algo = llm ? self.XAAlgo.score(llm.engagement) : null;
-  const aiScore = llm ? Math.round(0.4 * rules.score + 0.6 * llm.ai_score) : rules.score;
-  return { text: clean, rules, local, llm, llmError, llmConfigured: configured, algo, aiScore, model: settings.llm.model };
-}
-
-async function rewriteTweet(text, analysis) {
-  const settings = await getSettings();
-  if (!llmConfigured(settings.llm)) throw new Error('改写需要先在设置页配置 LLM。');
-  const rewrites = await keepAlive(() => self.XALLM.rewrite(settings.llm, text, analysis));
-  return rewrites.map((r) => ({ ...r, rules: self.XARules.analyze(r.text), length: self.XARules.weightedLength(r.text) }));
 }
 
 // ---------- 消息路由 ----------
@@ -1335,7 +1384,6 @@ async function handle(msg, sender) {
         job, queueLength: queue.length, cap: S.effectiveDailyCap(settings),
         queueCounts: { unfollow: queue.filter((q) => q.action !== 'follow').length, follow: queue.filter((q) => q.action === 'follow').length },
         collect, me: rest.me || null, owner: rest.owner || null, dryRun: settings.dryRun,
-        llmConfigured: llmConfigured(settings.llm),
         exec: {
           mode: settings.execMode,
           apiBroken: Date.now() < (exec.apiBrokenUntil || 0),
@@ -1345,15 +1393,6 @@ async function handle(msg, sender) {
         },
         eta: S.estimateFinish(job, queue.length, settings, Date.now()),
       };
-    }
-    case 'xa:analyze':
-      return analyzeTweet(msg.text, msg.useLLM);
-    case 'xa:rewrite':
-      return { rewrites: await rewriteTweet(msg.text, msg.analysis) };
-    case 'xa:ping': {
-      const settings = await getSettings();
-      const cfg = { ...settings.llm, ...(msg.llm || {}) };
-      return { ok: await keepAlive(() => self.XALLM.ping(cfg)) };
     }
     case 'xa:openOptions':
       await chrome.runtime.openOptionsPage();
@@ -1441,6 +1480,8 @@ chrome.runtime.onInstalled.addListener(async (details) => {
   // 更新后旧的执行环境记录作废：新版本可能修好了接口问题。
   if (details.reason === 'update') {
     await store.set({ exec: {} });
+    // 推文体检功能已经去掉，删掉它留下的缓存。
+    await chrome.storage.local.remove('cache');
     await recoverEnvTrip();
   }
   if (details.reason === 'install') chrome.runtime.openOptionsPage();

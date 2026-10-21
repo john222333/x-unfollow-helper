@@ -100,7 +100,7 @@
     return !!document.querySelector('[data-testid="loginButton"], [data-testid="signupButton"], a[href="/login"], a[href="/i/flow/login"]');
   }
 
-  async function act({ action, id, dryRun, me }) {
+  async function act({ action, id, dryRun, me, accountVerified }) {
     const blocker = detectBlocker();
     if (blocker) return { result: blocker };
 
@@ -110,6 +110,8 @@
     if (who && me && who.toLowerCase() !== String(me).toLowerCase()) {
       return { result: 'wrong_account', detail: `现在登录的是 @${who}，关注列表是 @${me} 的` };
     }
+    // 页面上找不到登录账号、也没法用 cookie 核对时，宁可不点。
+    if (!who && !accountVerified) return { result: 'no_button', detail: '页面上找不到登录的账号，无法核对' };
 
     const found = await waitFor(() => {
       const b = headerButton();
@@ -231,58 +233,8 @@
       .some((b) => !b.closest('[data-testid="UserCell"]') && /^(retry|try again|重试|重新尝试)$/i.test((b.innerText || '').trim()));
   }
 
-  // 推文与发推框
-  function tweetText(article) {
-    const el = article.querySelector('[data-testid="tweetText"]');
-    return el ? el.innerText.trim() : '';
-  }
-
-  // 记住最后编辑的输入框：连发推（串推）时一个工具栏对应好几个输入框。
-  const EDITOR = '[data-testid^="tweetTextarea_"][contenteditable="true"], [data-testid^="tweetTextarea_"] [contenteditable="true"]';
-  let lastEditor = null;
-  document.addEventListener('focusin', (e) => {
-    const ed = e.target && e.target.closest && e.target.closest('[contenteditable="true"]');
-    if (ed && ed.matches(EDITOR)) lastEditor = ed;
-  }, true);
-
-  function composeEditorFor(toolbar) {
-    let node = toolbar;
-    for (let i = 0; i < 10 && node; i++) {
-      if (node.querySelector) {
-        if (lastEditor && lastEditor.isConnected && node.contains(lastEditor)) return lastEditor;
-        const ed = node.querySelector(EDITOR);
-        if (ed) return ed;
-      }
-      node = node.parentElement;
-    }
-    return null;
-  }
-
-  async function replaceEditorText(editor, text) {
-    editor.focus();
-    const sel = window.getSelection();
-    const range = document.createRange();
-    range.selectNodeContents(editor);
-    sel.removeAllRanges();
-    sel.addRange(range);
-    // Draft.js 对粘贴事件的处理最稳定，能保留换行。
-    try {
-      const dt = new DataTransfer();
-      dt.setData('text/plain', text);
-      editor.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
-    } catch { /* 不支持就走下面的方法 */ }
-    await sleep(300);
-    const norm = (s) => s.replace(/\s+/g, '');
-    if (norm(editor.innerText || '') === norm(text)) return true;
-    editor.focus();
-    document.execCommand('selectAll', false, null);
-    document.execCommand('insertText', false, text);
-    await sleep(200);
-    return norm(editor.innerText || '') === norm(text);
-  }
-
   root.XADom = {
     sleep, rand, waitFor, act, whoami, currentHandle, loggedOut, visibleUsers, parseGraphQLUsers: root.XAPI.parseGraphQLUsers, detectBlocker,
-    nearBottom, loadingMore, loadError, tweetText, composeEditorFor, replaceEditorText, primaryColumn,
+    nearBottom, loadingMore, loadError, primaryColumn,
   };
 })(typeof globalThis !== 'undefined' ? globalThis : self);

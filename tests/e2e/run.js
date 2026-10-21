@@ -1,4 +1,4 @@
-// 端到端冒烟测试：加载插件，用模拟的 x.com（页面 + 网页版接口）和模拟的 LLM 接口跑一遍主要流程。
+// 端到端冒烟测试：加载插件，用模拟的 x.com（页面 + 网页版接口）跑一遍主要流程。
 // 运行：node tests/e2e/run.js   （需要 playwright 和 Chromium）
 'use strict';
 
@@ -6,7 +6,6 @@
 process.env.PW_EXPERIMENTAL_SERVICE_WORKER_NETWORK_EVENTS = '1';
 
 const path = require('path');
-const http = require('http');
 const fs = require('fs');
 const os = require('os');
 const { chromium } = require('playwright');
@@ -15,68 +14,6 @@ const mock = require('./mock-x');
 const EXT = path.resolve(__dirname, '../..');
 const OUT = path.resolve(__dirname, 'out');
 fs.mkdirSync(OUT, { recursive: true });
-
-function startMockLLM() {
-  const server = http.createServer((req, res) => {
-    let body = '';
-    req.on('data', (c) => { body += c; });
-    req.on('end', () => {
-      const j = JSON.parse(body || '{}');
-      const props = (((j.output_config || {}).format || {}).schema || {}).properties || {};
-      let out;
-      if (props.rewrites) {
-        out = { rewrites: [
-          { style: '最小改动', text: '这个工具改变了我写东西的方式，每天能省一个小时。', change_note: '去掉了“不仅仅是”和破折号' },
-          { style: '更口语', text: '用了两周，写稿快了不少，主要是省掉了反复改格式的时间。', change_note: '换成具体经历' },
-          { style: '更容易引发回复', text: '用了两周，写稿快了不少。你们平时写推最花时间的是哪一步？', change_note: '结尾加了一个问题' },
-        ] };
-      } else if (props.ai_score) {
-        out = {
-          ai_score: 82, verdict: '套话和排比太多，读起来像宣传稿。',
-          issues: [{ quote: '这不仅仅是一个工具', problem: '典型的“不是 X 而是 Y”句式', suggestion: '这个工具' }],
-          engagement: { favorite: 0.015, reply: 0.002, retweet: 0.001, quote: 0.0003, share: 0.0005, share_via_dm: 0.0002,
-            share_via_copy_link: 0.0002, follow_author: 0.0002, click: 0.04, open_link: 0.005, dwell: 0.2, not_dwelled: 0.7,
-            not_interested: 0.006, block_author: 0.0003, mute_author: 0.0005, report: 0.0001 },
-          algo_tips: ['删掉 3 个 emoji 和破折号', '结尾加一个具体的问题'],
-        };
-      } else {
-        out = { ok: true };
-      }
-      const ok = req.headers['x-api-key'] === 'test-key';
-      if (!ok) {
-        res.writeHead(401, { 'content-type': 'application/json', 'access-control-allow-origin': '*' });
-        res.end(JSON.stringify({ error: { message: 'bad key' } }));
-        return;
-      }
-      if (!j.stream) {
-        res.writeHead(200, { 'content-type': 'application/json', 'access-control-allow-origin': '*' });
-        res.end(JSON.stringify({ content: [{ type: 'text', text: JSON.stringify(out) }], stop_reason: 'end_turn' }));
-        return;
-      }
-      // 和真实接口一样按 SSE 分块返回，而且故意拖到 35 秒以上，确认 service worker 不会中途被结束。
-      res.writeHead(200, { 'content-type': 'text/event-stream', 'access-control-allow-origin': '*' });
-      const text = JSON.stringify(out);
-      const chunks = text.match(/[\s\S]{1,40}/g);
-      const ev = (type, data) => res.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`);
-      ev('message_start', { message: { id: 'm', model: j.model } });
-      ev('content_block_start', { index: 0, content_block: { type: 'text', text: '' } });
-      const slow = props.rewrites;
-      let i = 0;
-      const timer = setInterval(() => {
-        if (i < chunks.length) {
-          ev('content_block_delta', { index: 0, delta: { type: 'text_delta', text: chunks[i++] } });
-          return;
-        }
-        clearInterval(timer);
-        ev('content_block_stop', { index: 0 });
-        ev('message_delta', { delta: { stop_reason: 'end_turn' } });
-        ev('message_stop', {});
-        res.end();
-      }, slow ? Math.ceil(36000 / chunks.length) : 20);
-    });
-  });
-  return new Promise((r) => server.listen(0, '127.0.0.1', () => r(server)));
-}
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function until(fn, ms, label) {
@@ -92,8 +29,6 @@ async function until(fn, ms, label) {
 const errors = [];
 
 (async () => {
-  const llm = await startMockLLM();
-  const port = llm.address().port;
   const userDir = fs.mkdtempSync(path.join(os.tmpdir(), 'xa-e2e-'));
   const context = await chromium.launchPersistentContext(userDir, {
     channel: 'chromium',
@@ -131,12 +66,13 @@ const errors = [];
   if (!defaults.autoStart || defaults.confirmEachBatch) throw new Error('默认应该自动开始、不用每批确认');
   if (defaults.execMode !== 'auto') throw new Error('默认执行方式应该是后台接口');
 
-  // 设置：最快允许的节奏、模拟 LLM
-  await opts.evaluate((port) => chrome.storage.local.get('settings').then(({ settings }) => chrome.storage.local.set({ settings: {
+  if (defaults.llm || defaults.ui) throw new Error('推文体检的设置应该已经去掉');
+
+  // 设置：最快允许的节奏
+  await opts.evaluate(() => chrome.storage.local.get('settings').then(({ settings }) => chrome.storage.local.set({ settings: {
     ...settings,
     pace: { minDelaySec: 5, maxDelaySec: 5, batchSize: 5, restMinMin: 10, restMaxMin: 10, dailyCap: 100 },
-    llm: { provider: 'anthropic', baseUrl: `http://127.0.0.1:${port}`, model: 'claude-opus-5-5', effort: 'low', apiKey: 'test-key' },
-  } })), port);
+  } })));
   await opts.reload();
   await opts.evaluate(() => { window.__errs = []; window.addEventListener('error', (e) => window.__errs.push(String(e.message) + ' ' + (e.error && e.error.stack))); window.addEventListener('unhandledrejection', (e) => window.__errs.push('rej ' + (e.reason && e.reason.stack))); });
 
@@ -302,43 +238,87 @@ const errors = [];
   if (c2.mode !== 'window' || c2.status !== 'done' || c2.count !== mock.state.following.size) throw new Error('兜底读取不对');
   mock.state.collectApiBroken = false;
 
-  // 9. 推文体检：发推框按钮、模型评审、改写并替换
-  console.log('▶ 推文体检');
-  const tweet = await context.newPage();
-  await tweet.goto('https://x.com/home');
-  await tweet.waitForSelector('[data-testid="toolBar"] .xa-check-btn', { timeout: 15000 });
-  await tweet.click('[data-testid="tweetTextarea_0"]');
-  await tweet.keyboard.type('说实话，这不仅仅是一个工具，更是一种全新的工作方式——它赋能每一个创作者。🚀✨🔥');
-  await tweet.click('[data-testid="toolBar"] .xa-check-btn');
-  const panel = tweet.locator('#xa-panel-host');
-  await panel.locator('.tile .v').first().waitFor({ timeout: 20000 });
-  const scores = await panel.locator('.tile .v').allTextContents();
-  console.log('  分数', scores.join(' / '));
-  if (!(Number(scores[0]) >= 60)) throw new Error('AI 味分数应该很高');
-  if (!/^\d+$/.test(scores[1].trim())) throw new Error('应该有算法分');
-  await panel.locator('[data-act="rewrite"]').click();
-  await panel.locator('.card').first().waitFor({ timeout: 60000 });
-  await tweet.screenshot({ path: path.join(OUT, 'panel.png') });
-  await panel.locator('[data-act="use"]').nth(2).click();
-  await sleep(800);
-  const edited = await tweet.$eval('[data-testid="tweetTextarea_0"]', (e) => e.innerText);
-  console.log('  替换后', edited);
-  if (!edited.includes('你们平时写推')) throw new Error('改写没有替换进输入框');
-  if (!(await tweet.$('article [role="group"] .xa-check-btn'))) throw new Error('推文下没有体检按钮');
+  // 9. 重新读取：在别处取关的人从列表里移除；日志显示取关成功、X 上却还在关注的人标出来，可以一键重新取关
+  console.log('▶ 重新读取后更新列表');
+  mock.state.following.delete('1010'); // user10 在手机上取关了
+  mock.state.ignoreUnfollow = true; // X 对 user11 的取关返回成功，但实际没执行
+  const enq9 = await send({ type: 'xa:enqueue', keys: ['user11'], action: 'unfollow' });
+  if (!enq9.started) throw new Error(`应该自动开始：${JSON.stringify(enq9)}`);
+  await until(async () => { const j = await get('job'); return j && j.status === 'idle' && !j.current ? j : null; }, 60000, '取关 user11');
+  mock.state.ignoreUnfollow = false;
+  if ((await get('log')).pop().result !== 'ok' || (await get('users')).user11) throw new Error('user11 应该记成取关成功并从本地移除');
+  await opts.click('#tabs button[data-tab="users"]');
+  await opts.click('#collectBtn');
+  const c3 = await until(async () => { const c = await get('collect'); return c && c.status !== 'running' && c.startedAt > c2.finishedAt ? c : null; }, 90000, '重新读取完成');
+  const users9 = await get('users');
+  console.log('  结果', c3.mode, c3.status, c3.message);
+  if (c3.mode !== 'api' || c3.status !== 'done') throw new Error('应该在后台读取完成');
+  if (users9.user10) throw new Error('在别处取关的人应该从列表移除');
+  if (Object.keys(users9).length !== mock.state.following.size) throw new Error('本地列表应该和 X 上一致');
+  if (!users9.user11 || !users9.user11.unfollowFailed || c3.stillFollowing !== 1) throw new Error('取关没生效的人应该标出来');
+  if (!/移除了 1 个/.test(c3.message)) throw new Error('读取结果应该说明移除了几个人');
+  await until(async () => !(await opts.isHidden('#failedBanner')), 5000, '取关未生效提醒');
+  console.log('  ', await opts.textContent('#failedText'));
+  await opts.screenshot({ path: path.join(OUT, 'reread.png') });
+  await opts.click('#requeueFailed');
+  await until(async () => { const j = await get('job'); return j && j.status === 'idle' && !j.current && !(await get('queue')).length ? j : null; }, 60000, '重新取关 user11');
+  if (mock.state.following.has('1011') || (await get('users')).user11) throw new Error('重新取关后 user11 应该不在列表里');
+  await until(async () => opts.isHidden('#failedBanner'), 5000, '提醒消失');
 
-  // 10. 管理页粘贴体检
-  await opts.bringToFront();
-  await opts.click('#tabs button[data-tab="check"]');
-  await opts.fill('#checkText', 'Here\'s the thing: it\'s not just a tool, it\'s a game-changer. Let that sink in.');
-  await opts.click('#checkBtn');
-  await opts.locator('#checkOut .tile .v').first().waitFor({ timeout: 20000 });
-  await opts.screenshot({ path: path.join(OUT, 'check.png'), fullPage: true });
+  // 切换账号：任务进行中在 x.com 切到另一个账号（页面上的用户名一时还没变），后台不能在新账号上取关
+  console.log('▶ 中途切换账号');
+  if ((await get('owner')).userId !== '999') throw new Error('读取时应该记下列表主人的账号 ID');
+  const twid = (id) => context.addCookies([{ ...mock.COOKIES.find((c) => c.name === 'twid'), value: `u%3D${id}` }]);
+  await twid('555');
+  const destroyBefore = mock.state.calls.destroy;
+  await send({ type: 'xa:enqueue', keys: ['user12'], action: 'unfollow' });
+  const switched = await until(async () => { const j = await get('job'); return j && j.status === 'paused' ? j : null; }, 60000, '切换账号后暂停');
+  console.log('  ', switched.lastError);
+  if (mock.state.calls.destroy !== destroyBefore || !mock.state.following.has('1012')) throw new Error('切换账号后不应该发出取关请求');
+  if ((await get('log')).pop().result !== 'wrong_account') throw new Error('日志应该记录账号不对');
+  // 队列不空时不能读取另一个账号的列表
+  await opts.evaluate(() => chrome.storage.local.set({ owner: { handle: 'someone_else', userId: '777', at: Date.now() } }));
+  await send({ type: 'xa:collect' });
+  const refused = await until(async () => { const c = await get('collect'); return c && c.status === 'error' ? c : null; }, 30000, '拒绝读取');
+  console.log('  ', refused.message);
+  if (!/清空队列/.test(refused.message) || !(await get('users')).user12) throw new Error('队列不空时换账号读取应该被拒绝，且不动原来的列表');
+  await opts.evaluate(() => chrome.storage.local.set({ owner: { handle: 'tester', userId: '999', at: Date.now() } }));
+  await twid('999');
+  await send({ type: 'xa:resume' });
+  await until(async () => { const j = await get('job'); return j && j.status === 'idle' && !j.current ? j : null; }, 60000, '切回账号后继续');
+  if (mock.state.following.has('1012')) throw new Error('切回原来的账号后应该继续取关');
 
-  // 11. 预计完成时间：队列里放 150 人，按每天 100 个应该要跨天
+  // X 中途返回出错的一页：重试，偶尔一次能自己恢复；一直出错就按没读完处理，不能把没读到的人删掉
+  console.log('▶ X 中途返回出错的一页');
+  const readOnce = async () => {
+    const prev = (await get('collect')).startedAt;
+    await send({ type: 'xa:collect' });
+    return until(async () => { const c = await get('collect'); return c && c.startedAt > prev && c.status !== 'running' ? c : null; }, 90000, '读取结束');
+  };
+  const countBefore = Object.keys(await get('users')).length;
+  mock.state.partialPages = 1;
+  const c5 = await readOnce();
+  console.log('  出错一次', c5.status, c5.message);
+  if (c5.status !== 'done' || Object.keys(await get('users')).length !== countBefore) throw new Error('出错一次应该重试后读完');
+  mock.state.partialPages = 3;
+  const c6 = await readOnce();
+  console.log('  一直出错', c6.status, c6.message);
+  if (c6.status !== 'stopped' || Object.keys(await get('users')).length !== countBefore) throw new Error('一直出错应该按没读完处理，不删人');
+
+  // 停止读取后马上重新读取：上一轮还没退出，新的一轮也要能读完
+  console.log('▶ 停止后马上重新读取');
+  await send({ type: 'xa:collect' });
+  await sleep(300);
+  await send({ type: 'xa:stopCollect' });
+  const c7 = await readOnce();
+  console.log('  ', c7.status, c7.message);
+  if (c7.status !== 'done') throw new Error('停止后重新读取应该能读完');
+
+  // 10. 预计完成时间：队列里放 150 人，按每天 100 个应该要跨天
   await send({ type: 'xa:pause' }).catch(() => {});
   await opts.click('#tabs button[data-tab="job"]');
   await opts.evaluate(() => chrome.storage.local.set({ queue: Array.from({ length: 150 }, (_, i) => ({ key: `fake${i}`, handle: `fake${i}`, id: String(5000 + i), action: 'unfollow', addedAt: Date.now() })) }));
-  const etaText = await until(async () => { const t = await opts.textContent('#etaLine'); return /天/.test(t) ? t : null; }, 5000, '预计完成时间');
+  const etaText = await until(async () => { const t = await opts.textContent('#etaLine'); return /150 人/.test(t) && /\d+ 天/.test(t) ? t : null; }, 5000, '预计完成时间');
   console.log('  ', etaText);
   await opts.screenshot({ path: path.join(OUT, 'eta.png') });
   await send({ type: 'xa:clearQueue' });
@@ -351,7 +331,7 @@ const errors = [];
   });
   if (!(eta.days >= 1)) throw new Error('150 人应该要跨天');
 
-  // 12. 弹窗
+  // 11. 弹窗
   const popup = await context.newPage();
   await popup.goto(`chrome-extension://${extId}/src/popup/popup.html`);
   await popup.waitForSelector('#status');
@@ -369,7 +349,6 @@ const errors = [];
   }
   console.log('✅ 全部通过');
   await context.close();
-  llm.close();
 })().catch((e) => {
   if (errors.length) console.error('页面错误：\n' + errors.join('\n'));
   console.error('❌', e);

@@ -1,6 +1,6 @@
 (function () {
   'use strict';
-  const send = window.XAPanel.send;
+  const send = window.XAMsg.send;
   const $ = (id) => document.getElementById(id);
   const STATUS = { idle: '空闲', running: '进行中', awaiting_confirm: '待确认', paused: '已暂停', tripped: '已熔断', daily_cap: '今日已满' };
 
@@ -32,7 +32,7 @@
     if (st.job.status === 'running' || st.job.status === 'awaiting_confirm') btns.push('<button data-do="pause">暂停取关</button>');
     if (st.job.status === 'awaiting_confirm') btns.push('<button data-go="job">去确认下一批</button>');
     if (['paused', 'idle'].includes(st.job.status) && st.queueLength) btns.push(`<button data-do="start">${st.job.status === 'paused' ? '继续取关' : '开始取关'}</button>`);
-    btns.push('<button data-go="check">粘贴体检</button>');
+    btns.push('<button data-go="log">日志</button>');
     $('actions').innerHTML = btns.join('');
   }
 

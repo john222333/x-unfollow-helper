@@ -1,4 +1,4 @@
-// x.com 内容脚本：替后台在已登录的页面里调用 X 接口、读取关注列表，在发推框和推文上加「体检」按钮。
+// x.com 内容脚本：替后台在已登录的页面里调用 X 接口；接口不可用时在页面上读取关注列表、点关注按钮。
 (function () {
   'use strict';
   // 插件更新后会把脚本重新注入到已打开的页面。旧脚本这时已经失效，由新脚本接管。
@@ -7,15 +7,13 @@
   if (window.__xaContent && window.__xaContent.alive()) return;
   if (window.__xaContent) { try { window.__xaContent.retire(); } catch { /* 忽略 */ } }
   const INST = Math.random().toString(36).slice(2, 10);
-  let observer = null;
-  window.__xaContent = {
-    alive,
-    retire: () => { if (observer) observer.disconnect(); },
-  };
+  window.__xaContent = { alive, retire: () => {} };
+  // 老版本在发推框和推文下加过「体检」按钮，这个功能已经去掉，清掉页面上残留的按钮。
+  document.querySelectorAll('.xa-check-btn').forEach((b) => b.remove());
 
   const D = window.XADom;
   const XAPI = window.XAPI;
-  const send = (msg) => window.XAPanel.send(msg);
+  const send = (msg) => window.XAMsg.send(msg);
 
   // ---------- 在页面里调用 X 接口 ----------
   // 从这个页面发出的请求和网页版自己的请求一样：同源、自动带上登录 cookie。
@@ -24,9 +22,25 @@
     return m ? decodeURIComponent(m[1]) : null;
   }
 
+  // 当前登录账号的 ID（twid cookie 里的 u=...）。切换账号后 cookie 会立刻变。
+  function loggedInUserId() {
+    const m = /u=(\d+)/.exec(cookie('twid') || '');
+    return m ? m[1] : null;
+  }
+
+  // 后台要求的账号和这个页面登录的账号不一致时，不发请求、不点按钮。
+  // 读不到 cookie 时不在这里拦（没登录的话请求本身会失败），由后台按用户名核对。
+  function accountMismatch(expectUserId) {
+    const now = loggedInUserId();
+    if (!expectUserId || !now || now === String(expectUserId)) return null;
+    return { status: 0, error: 'wrong_account', userId: now };
+  }
+
   async function apiFetch(req) {
     const csrf = cookie('ct0');
     if (!csrf) return { status: 0, error: 'no_csrf' };
+    const wrong = accountMismatch(req.expectUserId);
+    if (wrong) return wrong;
     const url = new URL(req.path, location.origin);
     for (const [k, v] of Object.entries(req.query || {})) url.searchParams.set(k, v);
     const headers = {
@@ -58,12 +72,10 @@
   }
 
   function pageInfo() {
-    const twid = cookie('twid') || '';
-    const m = /u=(\d+)/.exec(twid);
     return {
       handle: D.currentHandle(),
       loggedOut: D.loggedOut(),
-      userId: m ? m[1] : null,
+      userId: loggedInUserId(),
       scripts: Array.from(document.scripts).map((x) => x.src).filter((src) => /\/client-web\/main\.[\w-]+\.js/.test(src)),
       visible: document.visibilityState,
     };
@@ -129,7 +141,7 @@
     let rounds = 0;
     let complete = false;
     let reason = '';
-    showBadge('X 助手正在读取关注列表… 请保持这个窗口打开');
+    showBadge('X 取关助手正在读取关注列表… 请保持这个窗口打开');
     await D.waitFor(() => document.querySelector('[data-testid="UserCell"]'), 20000);
 
     while (!collecting.stop) {
@@ -148,7 +160,7 @@
       const hidden = document.visibilityState === 'hidden';
       if (newCount) idle = 0;
       else if (!hidden) idle += 1;
-      showBadge(`X 助手正在读取关注列表… 已读取 ${seen.size} 个`);
+      showBadge(`X 取关助手正在读取关注列表… 已读取 ${seen.size} 个`);
       if (rounds % 3 === 0 || hidden) send({ type: 'xa:collect-progress', runId, seen: seen.size, hidden }).catch(() => {});
 
       const blocker = D.detectBlocker();
@@ -211,9 +223,14 @@
       return false;
     }
     if (msg.type === 'xa:act') {
+      if (accountMismatch(msg.expectUserId)) {
+        sendResponse({ result: 'wrong_account', detail: '这个页面登录的账号和关注列表不一致' });
+        return false;
+      }
       const verb = msg.action === 'follow' ? '重新关注' : '取关';
-      showBadge(`X 助手：正在${msg.dryRun ? '演练' : ''}${verb} @${msg.handle}`, false);
-      D.act(msg).then(sendResponse, (e) => sendResponse({ result: 'error', detail: e.message }));
+      showBadge(`X 取关助手：正在${msg.dryRun ? '演练' : ''}${verb} @${msg.handle}`, false);
+      const accountVerified = !!msg.expectUserId && loggedInUserId() === String(msg.expectUserId);
+      D.act({ ...msg, accountVerified }).then(sendResponse, (e) => sendResponse({ result: 'error', detail: e.message }));
       return true;
     }
     return false;
@@ -224,98 +241,4 @@
     const handle = D.currentHandle();
     if (handle) send({ type: 'xa:me', handle }).catch(() => {});
   }, 3000);
-
-  // ---------- 体检按钮 ----------
-  let ui = { composeButton: true, tweetButtons: true };
-  chrome.storage.local.get('settings').then(({ settings }) => {
-    if (settings && settings.ui) ui = { ...ui, ...settings.ui };
-    scan();
-  });
-  chrome.storage.onChanged.addListener((changes) => {
-    if (changes.settings && changes.settings.newValue) {
-      ui = { ...ui, ...(changes.settings.newValue.ui || {}) };
-      document.querySelectorAll('.xa-check-btn').forEach((b) => b.remove());
-      document.querySelectorAll('[data-xa-done]').forEach((e) => e.removeAttribute('data-xa-done'));
-      scan();
-    }
-  });
-
-  function makeButton(title) {
-    const b = document.createElement('button');
-    b.type = 'button';
-    b.className = 'xa-check-btn';
-    b.dataset.xaInst = INST;
-    b.textContent = '体检';
-    b.title = title;
-    b.style.cssText = 'border:1px solid rgba(29,155,240,.5);color:rgb(29,155,240);background:transparent;border-radius:999px;'
-      + 'font:600 12px -apple-system,"PingFang SC",sans-serif;padding:2px 10px;margin:0 6px;cursor:pointer;height:26px;align-self:center';
-    return b;
-  }
-
-  // 写推文时按钮上实时显示本地规则算出的 AI 味，不用点开就能看到。
-  function liveLabel(btn, text) {
-    const t = (text || '').trim();
-    if (!t) { btn.textContent = '体检'; btn.style.color = 'rgb(29,155,240)'; return; }
-    const score = window.XARules.analyze(t).score;
-    btn.textContent = `体检 · AI味 ${score}`;
-    btn.style.color = score >= 60 ? 'rgb(244,33,46)' : score >= 30 ? 'rgb(255,173,31)' : 'rgb(0,186,124)';
-  }
-  let liveTimer = null;
-  document.addEventListener('input', (e) => {
-    const ed = e.target && e.target.closest && e.target.closest('[data-testid^="tweetTextarea_"]');
-    if (!ed || !ui.composeButton) return;
-    clearTimeout(liveTimer);
-    liveTimer = setTimeout(() => {
-      let node = ed;
-      for (let i = 0; i < 14 && node; i++, node = node.parentElement) {
-        const btn = node.querySelector && node.querySelector(`[data-testid="toolBar"] .xa-check-btn[data-xa-inst="${INST}"]`);
-        if (btn) { liveLabel(btn, ed.innerText); return; }
-      }
-    }, 400);
-  }, true);
-
-  function scan() {
-    if (!alive()) { if (observer) observer.disconnect(); return; }
-    // 旧版本脚本留下的按钮已经失效，换成新的。
-    document.querySelectorAll(`.xa-check-btn:not([data-xa-inst="${INST}"])`).forEach((b) => b.remove());
-    if (ui.composeButton) {
-      document.querySelectorAll(`[data-testid="toolBar"]:not([data-xa-done="${INST}"])`).forEach((bar) => {
-        bar.setAttribute('data-xa-done', INST);
-        const btn = makeButton('检查这条推文的 AI 味和算法友好度');
-        btn.addEventListener('click', (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          const editor = D.composeEditorFor(bar);
-          const text = editor ? editor.innerText.trim() : '';
-          if (!text) { btn.textContent = '先写点内容'; setTimeout(() => { btn.textContent = '体检'; }, 1500); return; }
-          window.XAPanel.open({ text, floating: true, onReplace: (t) => D.replaceEditorText(D.composeEditorFor(bar) || editor, t) });
-        });
-        const list = bar.querySelector('[data-testid="ScrollSnap-List"]');
-        (list || bar).appendChild(btn);
-      });
-    }
-    if (ui.tweetButtons) {
-      document.querySelectorAll(`article[data-testid="tweet"]:not([data-xa-done="${INST}"])`).forEach((article) => {
-        const group = article.querySelector('[role="group"]');
-        if (!group) return;
-        article.setAttribute('data-xa-done', INST);
-        if (!D.tweetText(article)) return;
-        const btn = makeButton('检查这条推文的 AI 味');
-        btn.addEventListener('click', (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          window.XAPanel.open({ text: D.tweetText(article), floating: true });
-        });
-        group.appendChild(btn);
-      });
-    }
-  }
-
-  let pending = false;
-  observer = new MutationObserver(() => {
-    if (pending) return;
-    pending = true;
-    setTimeout(() => { pending = false; scan(); }, 600);
-  });
-  observer.observe(document.documentElement, { childList: true, subtree: true });
 })();

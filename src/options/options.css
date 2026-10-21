@@ -79,3 +79,7 @@ table.grid { width: 100%; border-collapse: collapse; }
 .onboard ol { margin: 0; padding-left: 20px; display: grid; gap: 6px; }
 #etaLine:empty, #execLine:empty { display: none; }
 #etaLine { margin: 10px 0 0; }
+.chip.unfollowFailed { background: rgba(224,36,94,.12); color: var(--bad); }
+#failedBanner { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+#failedBanner[hidden] { display: none; }
+.btn.small { padding: 3px 10px; font-size: 12px; }

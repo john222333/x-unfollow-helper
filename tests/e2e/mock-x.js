@@ -25,6 +25,8 @@ const state = {
   friendshipsDown: false, // 取关、关注请求直接断开（模拟页面那边请求发不出去）
   collectApiBroken: false, // 插件自己发的关注列表请求返回 404（模拟后台读取不可用）
   rateLimitOnce: false, // 下一次读取第二页时返回一次 429
+  ignoreUnfollow: false, // 取关接口返回成功，但实际没有取关（模拟 X 悄悄不执行）
+  partialPages: 0, // 接下来几次读取后续页时返回「部分出错」的空数据（模拟 X 中途超时）
   calls: { destroy: 0, create: 0, following: 0, settings: 0 },
 };
 
@@ -34,6 +36,8 @@ function reset() {
   state.friendshipsDown = false;
   state.collectApiBroken = false;
   state.rateLimitOnce = false;
+  state.ignoreUnfollow = false;
+  state.partialPages = 0;
   state.calls = { destroy: 0, create: 0, following: 0, settings: 0 };
 }
 
@@ -135,15 +139,7 @@ function profileHtml(handle) {
 }
 
 function homeHtml() {
-  return page(`<div>
-    <div data-testid="tweetTextarea_0" contenteditable="true" role="textbox" style="min-height:60px;border:1px solid #ccc"></div>
-    <div data-testid="toolBar"><div data-testid="ScrollSnap-List"><button>图片</button></div></div>
-  </div>
-  <article data-testid="tweet"><div data-testid="tweetText">说实话，这不仅仅是一个工具，更是一种全新的工作方式——它赋能每一个创作者。🚀✨🔥</div>
-    <div role="group"><button>回复</button></div></article>`, `
-    // 简化的 Draft.js 粘贴行为
-    const ed = document.querySelector('[data-testid="tweetTextarea_0"]');
-    ed.addEventListener('paste', (e) => { e.preventDefault(); ed.innerText = e.clipboardData.getData('text/plain'); });`);
+  return page('<div data-testid="tweet">首页</div>');
 }
 
 // X 前端代码里登记 GraphQL 操作的写法（这里写成合法的 JS，页面加载时不会报错）。
@@ -182,6 +178,10 @@ async function apiRoute(r, url, p) {
       state.rateLimitOnce = false;
       return json(r, 429, { errors: [{ code: 88, message: 'Rate limit exceeded' }] }, { 'x-rate-limit-remaining': '0', 'x-rate-limit-reset': String(Math.floor(Date.now() / 1000) + 2) });
     }
+    if (fromPlugin && state.partialPages > 0 && vars.cursor) {
+      state.partialPages--;
+      return json(r, 200, { errors: [{ message: 'Timeout: Unspecified' }], data: { user: {} } });
+    }
     return json(r, 200, followingPage(vars.cursor, fromPlugin ? 20 : 10), rateHeaders(40));
   }
 
@@ -200,7 +200,7 @@ async function apiRoute(r, url, p) {
     const u = USERS.find((x) => x.id === form.get('user_id'));
     if (!u) return json(r, 404, { errors: [{ code: 50, message: 'User not found.' }] });
     if (u.handle === 'user29') return json(r, 403, { errors: [{ code: 161, message: 'You are unable to follow more people at this time.' }] });
-    if (fm[1] === 'destroy') state.following.delete(u.id); else state.following.add(u.id);
+    if (fm[1] === 'destroy') { if (!state.ignoreUnfollow) state.following.delete(u.id); } else state.following.add(u.id);
     return json(r, 200, { id_str: u.id, screen_name: u.handle, following: fm[1] === 'create' });
   }
 

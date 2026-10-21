@@ -13,7 +13,7 @@
   };
 
   // 设置结构的版本。改了默认值、需要迁移老用户已保存的设置时加 1。
-  const SETTINGS_VERSION = 2;
+  const SETTINGS_VERSION = 3;
 
   const DEFAULT_SETTINGS = {
     v: SETTINGS_VERSION,
@@ -32,14 +32,6 @@
     // 执行方式：auto = 后台调用 X 网页版接口，不可用时自动改为后台标签页点按钮；ui = 只用后台标签页点按钮
     execMode: 'auto',
     keepAwake: true, // 取关进行中不让电脑自动休眠（屏幕照常关闭；合上笔记本盖子仍会休眠）
-    llm: {
-      provider: 'anthropic',
-      baseUrl: 'https://api.anthropic.com',
-      model: 'claude-opus-5-5',
-      effort: 'low',
-      apiKey: '',
-    },
-    ui: { composeButton: true, tweetButtons: true },
   };
 
   function clamp(v, [lo, hi]) {
@@ -62,6 +54,9 @@
     const v = Number(src.v) || 1;
     // v1 默认每批都要手动确认；v2 起默认自动执行。
     if (v < 2) src.confirmEachBatch = false;
+    // v3 去掉了推文体检，连同保存的 LLM 接口密钥一起删掉。
+    delete src.llm;
+    delete src.ui;
     src.v = SETTINGS_VERSION;
     return src;
   }
@@ -72,8 +67,6 @@
       ...DEFAULT_SETTINGS,
       ...src,
       pace: normalizePace(src.pace),
-      llm: { ...DEFAULT_SETTINGS.llm, ...(src.llm || {}) },
-      ui: { ...DEFAULT_SETTINGS.ui, ...(src.ui || {}) },
       execMode: src.execMode === 'ui' ? 'ui' : 'auto',
       keepAwake: src.keepAwake !== false,
     };
@@ -122,6 +115,7 @@
   // 根据已知字段给关注对象打标签。字段缺失时不打。
   function tagsFor(u, opts) {
     const tags = [];
+    if (u.unfollowFailed) tags.push('unfollowFailed');
     if (u.followsYou === false) tags.push('notFollowBack');
     if (u.defaultAvatar) tags.push('defaultAvatar');
     if (u.tweets === 0) tags.push('noTweets');
@@ -137,6 +131,7 @@
   }
 
   const TAG_LABELS = {
+    unfollowFailed: '取关未生效',
     notFollowBack: '不回关',
     defaultAvatar: '默认头像',
     noTweets: '零推文',
@@ -146,7 +141,23 @@
     fewFollowers: '粉丝少',
   };
 
+  // 找出「日志里最后一次操作是取关成功、但这次读取时 X 上仍在关注」的人。
+  // log 是取关日志，users 是这次读取到的人，before 是读取开始的时间，since 之前的取关不算。返回 { key: 取关时间 }。
+  function unfollowsNotApplied(log, users, before, since) {
+    const last = {};
+    for (const l of Array.isArray(log) ? log : []) {
+      if (!l || l.dryRun || !['ok', 'pending'].includes(l.result) || !(l.t < before)) continue;
+      if (!last[l.key] || l.t >= last[l.key].t) last[l.key] = l;
+    }
+    const out = {};
+    for (const [k, l] of Object.entries(last)) {
+      if (l.action === 'unfollow' && l.t >= (since || 0) && users && users[k]) out[k] = l.t;
+    }
+    return out;
+  }
+
   root.XAStore = {
     LIMITS, DEFAULT_SETTINGS, SETTINGS_VERSION, normalizePace, mergeSettings, effectiveDailyCap, estimateFinish, dayKey, userKey, tagsFor, TAG_LABELS,
+    unfollowsNotApplied,
   };
 })(typeof globalThis !== 'undefined' ? globalThis : self);

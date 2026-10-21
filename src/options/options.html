@@ -3,12 +3,12 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>X 助手 · 管理页</title>
+  <title>X 取关助手 · 管理页</title>
   <link rel="stylesheet" href="options.css">
 </head>
 <body>
   <header class="top">
-    <div class="brand">X 助手 <span class="ver" id="ver"></span></div>
+    <div class="brand">X 取关助手 <span class="ver" id="ver"></span></div>
     <div class="me" id="me">未检测到账号</div>
     <div class="pill" id="execPill" title="取关在后台进行，不会弹出窗口">后台运行</div>
     <div class="pill" id="statusPill">空闲</div>
@@ -17,7 +17,6 @@
   <nav class="tabs" id="tabs">
     <button data-tab="users" class="on">关注管理</button>
     <button data-tab="job">取关任务</button>
-    <button data-tab="check">推文体检</button>
     <button data-tab="log">日志</button>
     <button data-tab="settings">设置</button>
   </nav>
@@ -43,6 +42,10 @@
         <p class="muted small">在后台读取，不会弹出窗口。你开着 x.com 时插件借用那个页面；没开时会在标签栏最左边放一个固定的小标签页，用完自动关掉。被 X 限制读取频率时会自动等待后接着读。</p>
       </div>
 
+      <div class="banner" id="failedBanner" hidden>
+        <span id="failedText"></span>
+        <button class="btn small" id="requeueFailed">重新加入取关队列</button>
+      </div>
       <div class="card">
         <div class="filters">
           <input type="search" id="q" placeholder="搜索名字、用户名或简介">
@@ -106,14 +109,6 @@
       </div>
     </section>
 
-    <!-- 推文体检 -->
-    <section id="tab-check" class="tab">
-      <div class="card">
-        <textarea id="checkText" rows="6" placeholder="把推文粘贴到这里"></textarea>
-        <div class="row"><button class="btn primary" id="checkBtn">体检</button><span class="muted small" id="checkCount"></span></div>
-      </div>
-      <div id="checkOut"></div>
-    </section>
 
     <!-- 日志 -->
     <section id="tab-log" class="tab">
@@ -152,48 +147,21 @@
           </label>
         </div>
       </div>
-      <div class="card">
-        <h3>LLM（推文体检用）</h3>
-        <div class="form">
-          <label>服务商
-            <span><select id="provider">
-              <option value="anthropic">Anthropic（Claude）</option>
-              <option value="openai">OpenAI 兼容接口</option>
-            </select>
-            <select id="preset"><option value="">常用预设…</option></select></span>
-          </label>
-          <label>接口地址 <span><input type="url" id="baseUrl" style="width:320px"></span></label>
-          <label>模型 <span><input type="text" id="model" style="width:240px"></span></label>
-          <label id="effortRow">思考强度 <span><select id="effort"><option value="low">low（快、便宜）</option><option value="medium">medium</option><option value="high">high</option><option value="">不设置</option></select></span></label>
-          <label>API Key <span><input type="password" id="apiKey" style="width:320px" autocomplete="off"></span><em>只保存在本机浏览器里</em></label>
-        </div>
-        <div class="row"><button class="btn" id="pingBtn">测试连接</button><span class="muted small" id="pingMsg"></span></div>
-      </div>
-      <div class="card">
-        <h3>页面按钮</h3>
-        <div class="form">
-          <label class="check"><input type="checkbox" id="composeButton"> 在发推框加「体检」按钮</label>
-          <label class="check"><input type="checkbox" id="tweetButtons"> 在每条推文下加「体检」按钮</label>
-        </div>
-      </div>
       <div class="row"><button class="btn primary" id="saveBtn">保存设置</button><span class="muted small" id="saveMsg"></span></div>
       <div class="card">
         <h3>数据</h3>
         <div class="row">
           <button class="btn" id="exportAll">导出全部数据（JSON）</button>
           <button class="btn" id="clearUsers">清空关注列表缓存</button>
-          <button class="btn" id="clearCache">清空体检缓存</button>
         </div>
-        <p class="muted small">所有数据只保存在这台电脑的浏览器里。取关和读取列表是在 x.com 页面里调用 X 网页版自己的接口，用的是浏览器已有的登录状态（和你在页面上点按钮发出的请求一样），登录信息不会被保存或发送到别处。只有你主动体检的推文文本会发送给你配置的 LLM 服务。</p>
+        <p class="muted small">所有数据只保存在这台电脑的浏览器里。取关和读取列表是在 x.com 页面里调用 X 网页版自己的接口，用的是浏览器已有的登录状态（和你在页面上点按钮发出的请求一样），登录信息不会被保存或发送到别处。除了 X 自己的网站和服务器（x.com、存放网页代码的 abs.twimg.com、显示头像用的 pbs.twimg.com），插件不连接任何服务器，也不收集任何统计数据。卸载插件会删除这里的全部数据。</p>
         <p class="muted small">本插件不是 X 官方产品。自动取关不符合 X 的自动化规则，即使按默认节奏也有被限制的风险，请自行承担。</p>
       </div>
     </section>
   </main>
 
   <script src="../lib/store.js"></script>
-  <script src="../lib/rules.js"></script>
-  <script src="../lib/algo.js"></script>
-  <script src="../lib/panel.js"></script>
+  <script src="../lib/msg.js"></script>
   <script src="options.js"></script>
 </body>
 </html>

@@ -5,7 +5,7 @@
   if (window.__xaHookInstalled) return;
   window.__xaHookInstalled = true;
 
-  const WATCH = /\/graphql\/[^/]+\/(Following|Followers|UserByScreenName)\b/;
+  const WATCH = /\/graphql\/[^/]+\/(Following)\b/;
 
   // 插件的内容脚本比这里晚加载，先到的数据缓存几份，等它来要时再发一遍。
   const buffer = [];

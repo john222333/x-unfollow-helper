@@ -1,0 +1,11 @@
+{
+  "extName": {
+    "message": "X 取关助手：分批慢速取关"
+  },
+  "extShortName": {
+    "message": "X 取关助手"
+  },
+  "extDescription": {
+    "message": "在已登录的 x.com 上读取关注列表、按标签筛选，然后在后台分批、慢速地取关，遇到 X 的限制自动停下。非 X 官方产品。"
+  }
+}

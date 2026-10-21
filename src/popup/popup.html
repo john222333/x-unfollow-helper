@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
-  <title>X 助手</title>
+  <title>X 取关助手</title>
   <style>
     :root { --bg:#fff; --fg:#0f1419; --muted:#536471; --line:#e6ecf0; --soft:#f2f5f7; --bad:#e0245e; }
     @media (prefers-color-scheme: dark) { :root { --bg:#15181c; --fg:#e7e9ea; --muted:#8b98a5; --line:#2f3336; --soft:#202327; } }
@@ -23,7 +23,7 @@
 </head>
 <body>
   <div class="wrap">
-    <h1>X 助手</h1>
+    <h1>X 取关助手</h1>
     <div class="muted" id="me"></div>
     <div class="grid">
       <div><div class="k">取关状态</div><div class="v" id="status">—</div></div>
@@ -34,10 +34,9 @@
     <div class="muted" id="eta"></div>
     <div class="err" id="err" hidden></div>
     <div class="row" id="actions"></div>
-    <p class="muted">在 x.com 发推框和推文下方点「体检」，可以检查 AI 味和算法友好度。</p>
   </div>
   <script src="../lib/store.js"></script>
-  <script src="../lib/panel.js"></script>
+  <script src="../lib/msg.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

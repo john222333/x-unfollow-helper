@@ -1,37 +1,53 @@
-# X 助手：分批取关 + 推文体检
+# X 取关助手 · Unfollow Helper for X
 
-一个 Chrome 插件（Manifest V3），在你已经登录的 x.com 上做两件事：
+一个 Chrome 插件（Manifest V3），帮你在已经登录的 x.com 上整理关注列表：读取你关注的人，按「不回关」「默认头像」「零推文」「疑似机器人」等标签筛选，然后在后台按慢速、分批的节奏取关。不弹窗口，批次之间不用再确认，遇到 X 的限制提示自动停下。
 
-- **分批取关**：读取你的关注列表，按「不回关」「默认头像」「零推文」「疑似机器人」等标签筛选，加入队列后自动开始，在后台按慢速、分批的节奏执行，不弹窗口，批次之间不用再手动确认，遇到 X 的限制提示自动停下。
-- **推文体检**：在发推框和每条推文下面加一个「体检」按钮，给出 **AI 味**（0–100，越低越像人写的）和 **算法友好度**（按 X 开源排序代码里的互动权重推算），列出逐句修改建议，并能生成 3 个改写版本一键替换。
+[English](#english) · [隐私政策](PRIVACY.md) · [更新记录](CHANGELOG.md) · [参与开发](CONTRIBUTING.md)
 
-> 本插件不是 X 官方产品。自动取关不符合 X 的自动化规则，即使按默认节奏也可能被限制或锁号，请自行判断并承担风险。
+> 本插件不是 X 官方产品，与 X Corp. 没有任何关系。批量取关属于 X 规则限制的自动化行为，即使按默认节奏也可能被限制或锁号，请自行判断并承担风险。
 
-## 安装（本地测试）
+## 功能
 
-1. 把整个 `x-assistant` 文件夹放到电脑上（不要只放里面的某个子文件夹）。
+- **读取关注列表**：在后台读取，几千人的列表一般几分钟读完；被 X 限制读取频率时自动等待后接着读。可以导出 CSV 备份。
+- **筛选**：标签（不回关、默认头像、零推文、受保护、已认证、疑似机器人、粉丝少、取关未生效）、关键词、粉丝数，多种排序。
+- **白名单**：点 ☆ 加入白名单的人永远不会被取关。
+- **后台分批取关**：加入队列后自动开始，随机间隔、分批休息、每天上限；电脑休眠醒来后接着跑。
+- **自动保护**：X 提示操作频繁、登录失效、账号被锁、出现人机验证时立刻停下，24 小时内不再继续。
+- **可撤销**：日志里勾选取关过的人，一键重新关注。
+- **重新读取会同步**：已经不再关注的人会从列表里移除；日志显示取关成功、X 上却还在关注的人会标成「取关未生效」，可以一键重新取关。
+
+## 安装
+
+### 从 Chrome 应用商店安装
+
+上架审核中，通过后会在这里放链接。
+
+### 从源码安装（开发者模式）
+
+1. 下载本仓库（或 Releases 里的 zip）并解压。
 2. Chrome 地址栏打开 `chrome://extensions`，打开右上角的 **开发者模式**。
-3. 点 **加载已解压的扩展程序**，选择 `x-assistant` 文件夹（里面能看到 `manifest.json` 的那一层）。
-4. 点浏览器右上角的拼图图标，把「X 助手」固定到工具栏。安装后会自动打开管理页。
+3. 点 **加载已解压的扩展程序**，选择能看到 `manifest.json` 的那一层文件夹。
+4. 点浏览器右上角的拼图图标，把「X 取关助手」固定到工具栏。安装后会自动打开管理页。
 
-改了代码以后，在 `chrome://extensions` 里点插件卡片上的刷新按钮即可，已经打开的 x.com 页面会自动换上新脚本。
+更新时覆盖文件，再在 `chrome://extensions` 里点插件卡片上的刷新按钮即可，已经打开的 x.com 页面会自动换上新脚本。
 
-## 第一次使用建议
+## 使用
 
-1. 确认 Chrome 里已经登录 x.com，管理页 → **关注管理** → **读取关注列表**。在后台读取，不弹窗口，几千人的列表一般几分钟读完；被 X 限制读取频率时会自动等待后接着读。
-2. 读取前后都可以点 **导出 CSV** 留一份关注列表备份。
+1. 确认 Chrome 里已经登录 x.com，管理页 → **关注管理** → **读取关注列表**。
+2. （建议）点 **导出 CSV** 留一份关注列表备份。
 3. （可选）**设置** → 勾选 **演练模式** → 保存。演练只检查登录状态和执行通道是否正常，不真的取关，只跑一批，队列保持不变。
-4. 用标签和关键词筛选，勾选要取关的人 → **加入队列并开始取关**。任务会自动开始，在后台执行，不用再去点「开始」。不想动的人点 ☆ 加入白名单，白名单里的人永远不会被取关。
-5. **取关任务** 页会显示预计什么时候处理完、现在用的是哪种执行方式。建议第一次先用一小批（比如 5 个）试真实取关，再按默认节奏慢慢来。
+4. 用标签和关键词筛选，勾选要取关的人 → **加入队列并开始取关**。任务在后台自动执行，不用再点「开始」。
+5. **取关任务** 页显示进度、预计完成时间和当前的执行方式。建议第一次先用一小批（比如 5 个）试，再按默认节奏慢慢来。
+6. 过一段时间再点一次 **读取关注列表**，列表会和 X 上同步。
 
 ## 后台运行是怎么做到的
 
 取关、重新关注、读取关注列表都不会弹出窗口：
 
-1. 你开着任意一个 x.com 页面时，插件借用那个页面，在里面调用 X 网页版自己的接口（和你在页面上点「取消关注」时浏览器发出的请求一样），页面本身不会有任何变化。
-2. 你没开 x.com 时，插件会在标签栏最左边放一个固定的小标签页来做这件事，批次休息、暂停或完成时自动关掉。如果你手动关掉它，任务会暂停，点「继续取关」即可恢复。
-3. 如果 X 改了接口导致后台接口用不了，插件会自动改为在这个后台标签页里打开对方主页点按钮，24 小时后再自动试一次接口。管理页顶部会显示当前是哪种方式，也可以在 **设置 → 执行方式** 里固定用后台标签页。
-4. 只有后台读取关注列表也失败时，才会退回到打开一个读取窗口滚动列表（这种方式需要窗口可见）。
+1. 你开着任意一个 x.com 页面时，插件借用那个页面，在里面调用 X 网页版自己的接口（和你在页面上点「取消关注」时浏览器发出的请求一样），页面本身不会有变化。
+2. 你没开 x.com 时，插件会在标签栏最左边放一个固定的小标签页来做这件事，批次休息、暂停或完成时自动关掉。手动关掉它任务会暂停，点「继续取关」即可恢复。
+3. X 改了接口导致后台接口用不了时，自动改为在这个后台标签页里打开对方主页点按钮，24 小时后再试一次接口。也可以在 **设置 → 执行方式** 里固定用这种方式。
+4. 只有后台读取关注列表也失败时，才会打开一个读取窗口滚动列表（这种方式需要窗口可见）。
 
 每次取关前都会核对 x.com 上登录的账号是不是关注列表的主人，不一致就暂停，不会在别的账号上操作。
 
@@ -46,48 +62,23 @@
 | 加入队列后自动开始 | 开启 | 可关闭 |
 | 每批开始前手动确认 | 关闭 | 可开启 |
 
-出现以下情况会立即 **熔断**（停止并通知你，建议 24 小时后再继续）：X 返回操作频繁或限额已满、登录失效、账号被临时锁定、出现人机验证、连续两次点了按钮但状态没变。点通知可以直接打开管理页。
+出现以下情况会立即 **熔断**（停止并通知你，建议 24 小时后再继续）：X 返回操作频繁或限额已满、登录失效、账号被临时锁定、出现人机验证、连续两次点了按钮但状态没变。
 
-插件自己这边的问题不会熔断：x.com 页面没有响应、加载超时时，那个人会放回队尾稍后再试；连续 3 次就等 15 分钟再继续，连续 9 次才暂停等你看一眼。操作途中电脑休眠被打断的，记成「电脑休眠打断了，稍后重做」，不算失败。
+插件自己这边的问题不会熔断：x.com 页面没有响应、加载超时时，那个人会放回队尾稍后再试；连续 3 次就等 15 分钟再继续，连续 9 次才暂停等你看一眼。操作途中电脑休眠被打断的不算失败，醒来后重做。
 
-任务进行中（包括批次之间的休息）插件会阻止电脑自动休眠，屏幕照常会关；合上笔记本盖子电脑仍会休眠，任务会在醒来后接着跑。不需要的话可以在 **设置** 里关掉。
-
-取关成功的记录可以在 **日志** 里勾选后 **重新关注**，同样按节奏执行。
-
-## 配置 LLM（推文体检）
-
-不配置也能用：本地规则会离线算出 AI 味并给出建议。配置后可以得到逐句评审、算法推算和改写。
-
-管理页 → 设置 → LLM，可以用「常用预设」快速填写：
-
-| 服务 | 接口地址 | 模型示例 |
-| --- | --- | --- |
-| Claude（默认） | `https://api.anthropic.com` | `claude-opus-5-5` |
-| DeepSeek | `https://api.deepseek.com` | `deepseek-chat` |
-| 通义千问 | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen-plus` |
-| 本机 Ollama | `http://localhost:11434/v1` | `qwen2.5:7b` |
-
-填好 API Key 后点 **测试连接**，再点 **保存设置**。第一次保存自定义地址时 Chrome 会询问是否允许访问该网站。同一条推文的体检结果会缓存，重复体检不会重复计费。
-
-## 算法友好度是怎么算的
-
-X 开源的排序代码（[xai-org/x-algorithm](https://github.com/xai-org/x-algorithm)，`home-mixer/params/param.rs`）里，一条帖子的排序分是「模型预测的各种互动概率 × 权重」之和，例如复制链接分享 +20、回复 +5、引用 +5、喜欢 +0.6、不感兴趣 −47.52、举报 −234。
-
-插件拿不到 X 的模型，所以让 LLM 估计你这条推文引发各种互动的概率，再乘以同一套权重，和一条「普通推文」的基线比较：持平是 50 分，越好越接近 100，越差越接近 0。它适合比较同一条推文改写前后哪个版本更好，**不代表真实曝光**。权重在 `src/lib/algo.js` 里，X 更新时可以同步修改。
+任务进行中插件会阻止电脑自动休眠（屏幕照常会关；合上笔记本盖子仍会休眠，醒来后接着跑）。不需要的话可以在 **设置** 里关掉。
 
 ## 隐私
 
-- 所有数据（关注列表、日志、设置、API Key）只保存在本机浏览器里。
-- 取关和读取关注列表是在 x.com 页面里调用 X 网页版自己的接口，用的是浏览器已有的登录状态（请求里带的防伪令牌 `ct0` 和网页版自己发请求时一样，从页面读取）。登录信息不会被保存，也不会发送到 x.com 以外的任何地方。
-- 页面脚本会记下网页版请求用的接口参数（应用令牌、GraphQL 的 queryId 和 features），以便 X 更新接口后后台读取还能用；不记录你的任何账号凭据。
-- 只有你主动体检的推文文本会发送给你配置的 LLM 服务。
+所有数据只保存在你自己的浏览器里。插件只连接 X 自己的服务器（x.com、存放网页代码的 abs.twimg.com、显示头像用的 pbs.twimg.com），不收集任何统计数据，没有自己的服务器。详见 [隐私政策](PRIVACY.md)。
 
 ## 已知限制
 
-- X 改了网页版接口时，后台接口可能失效，插件会自动换成后台标签页点按钮；接口的请求构造和结果判断集中在 `src/lib/xapi.js`。
-- X 改版后按钮的 `data-testid` 可能变化，备用的点按钮方式会失败（会熔断而不是乱点）。选择器集中在 `src/content/x-dom.js`。
-- 还不能按「多久没发推」筛选：关注列表的数据里没有最后发推时间，要逐个打开主页才能拿到，留到下一版。
-- 统计型 AI 检测器（Fast-DetectGPT、Binoculars）需要 GPU 后端，没有集成。
+- 界面目前只有中文。
+- X 改了网页版接口时，后台接口可能失效，插件会自动换成点按钮的方式；接口相关代码集中在 `src/lib/xapi.js`。
+- X 改版后按钮的 `data-testid` 可能变化，点按钮的方式会失败（会熔断而不是乱点）；选择器集中在 `src/content/x-dom.js`。
+- 还不能按「多久没发推」筛选：关注列表的数据里没有最后发推时间。
+- X 的关注列表偶尔有延迟，刚取关的人可能还会出现一阵子，这时会标成「取关未生效」，重新取关一次即可确认。
 
 ## 开发
 
@@ -95,32 +86,50 @@ X 开源的排序代码（[xai-org/x-algorithm](https://github.com/xai-org/x-alg
 
 ```
 manifest.json
-src/background.js        后台：执行环境、取关调度、限速熔断、关注列表读取与合并、LLM 调用
-src/lib/xapi.js          X 网页版接口：取关、关注、读取关注列表的请求构造和结果判断
+_locales/                插件名称和简介（中文、英文）
+src/background.js        后台：执行环境、取关调度、限速熔断、关注列表读取与合并
+src/lib/xapi.js          X 网页版接口：请求构造和结果判断
+src/lib/store.js         默认设置、节奏上下限、标签
+src/lib/msg.js           页面与后台之间的消息
 src/content/page-hook.js 页面环境：记下网页版的接口参数，旁听关注列表数据（兜底读取用）
 src/content/x-dom.js     x.com 的选择器、读取和点击（备用方式，X 改版时改这里）
-src/content/content.js   内容脚本：在页面里替后台调用接口，注入「体检」按钮
-src/lib/rules.js         本地 AI 味规则
-src/lib/algo.js          x-algorithm 权重与算法友好度推算
-src/lib/llm.js           Claude / OpenAI 兼容接口
-src/lib/panel.js         体检报告面板
-src/lib/store.js         默认设置、节奏上下限、标签
+src/content/content.js   内容脚本：在页面里替后台调用接口
 src/options/             管理页
 src/popup/               工具栏弹窗
-tests/                   单元测试与端到端测试
+tests/                   单元测试与端到端测试（模拟的 x.com）
+docs/store-listing.md    Chrome 应用商店上架材料
 ```
 
 ```bash
-npm test          # 单元测试（只需要 Node 18+）
-npm run test:e2e  # 端到端测试：加载插件，用模拟的 x.com 页面和模拟的 LLM 跑完整流程（需要 Playwright）
+npm test             # 单元测试（Node 18+）
+npm install          # 安装 Playwright，端到端测试需要
+npm run test:e2e     # 加载插件，在模拟的 x.com 上跑完整流程
+npm run zip          # 打包上架用的 zip（只包含插件运行需要的文件）
 ```
 
-## 参考与致谢
+## 致谢
 
-- [xai-org/x-algorithm](https://github.com/xai-org/x-algorithm)（Apache-2.0）：互动权重数值。
-- 维基百科 [Signs of AI writing](https://en.wikipedia.org/wiki/Wikipedia:Signs_of_AI_writing) 与 [humanizer](https://github.com/blader/humanizer)（MIT）：AI 写作特征的归纳思路，本项目的规则和中文部分为自行编写。
 - [XActions](https://github.com/nirholas/XActions)（Apache-2.0）：取关节奏与熔断思路参考，未复制代码。
 
 ## 许可证
 
-MIT
+[MIT](LICENSE)
+
+---
+
+## English
+
+**Unfollow Helper for X** is a Chrome extension (Manifest V3) that helps you clean up who you follow on x.com. It reads your Following list, lets you filter it (doesn't follow back, default avatar, no posts, likely bot, few followers, and more), and unfollows the accounts you pick slowly, in batches, in the background.
+
+> Not affiliated with X Corp. Bulk unfollowing is automation that X's rules restrict. Even at the default pace your account may be limited or locked. Use at your own risk.
+
+- **No pop-up windows.** Requests are sent from inside an x.com tab you already have open, the same way the X web app does it. If none is open, a small pinned background tab is used and closed when idle.
+- **Safe pacing.** Random 8–20 s delays, batches of 15 with 15–30 min rests, 100 per day by default. Rate-limit, login, lock or captcha signals stop everything for 24 hours.
+- **Account check.** Nothing happens if the logged-in account isn't the owner of the list.
+- **Undo.** Re-follow anyone from the log.
+- **Re-reading syncs the list.** Accounts you no longer follow are removed. Accounts the log says were unfollowed but X still lists are tagged so you can retry them.
+- **Private.** Everything stays in your browser. The extension only talks to X's own servers (x.com, abs.twimg.com, and pbs.twimg.com for avatars), has no server of its own, and collects no analytics. See [PRIVACY.md](PRIVACY.md).
+
+The UI is currently Chinese only. Install from source: open `chrome://extensions`, turn on Developer mode, click **Load unpacked**, and select the folder containing `manifest.json`.
+
+License: MIT.

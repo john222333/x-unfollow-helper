@@ -1,9 +1,10 @@
 {
   "manifest_version": 3,
-  "name": "X 助手：分批取关 + 推文体检",
-  "short_name": "X 助手",
-  "version": "0.3.1",
-  "description": "在已登录的 x.com 上分批、慢速取关；给推文的 AI 味和算法友好度打分并给出修改建议。非 X 官方产品。",
+  "name": "__MSG_extName__",
+  "short_name": "__MSG_extShortName__",
+  "version": "0.4.0",
+  "description": "__MSG_extDescription__",
+  "default_locale": "zh_CN",
   "minimum_chrome_version": "120",
   "icons": {
     "16": "icons/icon16.png",
@@ -21,14 +22,7 @@
   ],
   "host_permissions": [
     "https://x.com/*",
-    "https://abs.twimg.com/*",
-    "https://api.anthropic.com/*",
-    "http://localhost/*",
-    "http://127.0.0.1/*"
-  ],
-  "optional_host_permissions": [
-    "https://*/*",
-    "http://*/*"
+    "https://abs.twimg.com/*"
   ],
   "background": {
     "service_worker": "src/background.js"
@@ -49,11 +43,8 @@
         "https://x.com/*"
       ],
       "js": [
-        "src/lib/store.js",
-        "src/lib/rules.js",
-        "src/lib/algo.js",
         "src/lib/xapi.js",
-        "src/lib/panel.js",
+        "src/lib/msg.js",
         "src/content/x-dom.js",
         "src/content/content.js"
       ],
@@ -61,7 +52,7 @@
     }
   ],
   "action": {
-    "default_title": "X 助手",
+    "default_title": "__MSG_extShortName__",
     "default_popup": "src/popup/popup.html",
     "default_icon": {
       "16": "icons/icon16.png",

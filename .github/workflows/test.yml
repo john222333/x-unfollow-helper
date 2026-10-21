@@ -1,0 +1,31 @@
+name: test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Unit tests
+        run: npm test
+      - name: Install Playwright
+        run: |
+          npm install
+          npx playwright install --with-deps chromium
+      - name: End-to-end tests (mock x.com)
+        run: npm run test:e2e
+      - name: Package
+        run: npm run zip
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: x-unfollow-helper
+          path: |
+            x-unfollow-helper.zip
+            tests/e2e/out/

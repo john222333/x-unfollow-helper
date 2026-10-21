@@ -1,0 +1,11 @@
+{
+  "extName": {
+    "message": "Unfollow Helper for X"
+  },
+  "extShortName": {
+    "message": "Unfollow Helper"
+  },
+  "extDescription": {
+    "message": "Filter your X following list and unfollow in slow batches in the background. Stops on X rate limits. Not affiliated with X."
+  }
+}

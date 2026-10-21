@@ -1,9 +1,9 @@
-// 管理页：关注列表筛选、取关队列、日志、推文体检、设置。
+// 管理页：关注列表筛选、取关队列、日志、设置。
 (function () {
   'use strict';
 
   const S = window.XAStore;
-  const send = window.XAPanel.send;
+  const send = window.XAMsg.send;
   const $ = (id) => document.getElementById(id);
   const PAGE = 100;
 
@@ -108,7 +108,7 @@
       renderTimer = null;
       const has = (...keys) => keys.some((k) => pending.has(k));
       renderHeader();
-      if (has('users', 'whitelist', 'settings')) renderUsers();
+      if (has('users', 'whitelist', 'settings', 'queue')) renderUsers();
       if (has('collect')) renderCollect();
       if (has('job', 'queue', 'settings', 'exec')) renderJob();
       if (has('log')) renderLog();
@@ -209,6 +209,12 @@
       ? `共 ${total} 人，筛选出 ${list.length} 人，已选 ${selected.size} 人`
       : '还没有数据，先点「读取关注列表」';
     $('onboard').hidden = total > 0;
+    // 日志里显示取关成功、重新读取时 X 上却还在关注的人。
+    const failed = failedToRequeue();
+    $('failedBanner').hidden = !failed.length;
+    $('failedText').textContent = failed.length
+      ? `有 ${failed.length} 人日志里显示已取关，但这次读取时 X 上仍显示在关注：可能 X 没有执行那次取关，也可能 X 的列表还没刷新。重新取关一次就能确认，已经取关的人不受影响。可以用「取关未生效」标签筛选查看。`
+      : '';
     $('enqueueBtn').textContent = `${data.settings.autoStart ? '加入队列并开始取关' : '加入取关队列'}（${selected.size}）`;
     $('pageInfo').textContent = `${page + 1} / ${pages}`;
     $('pageAll').checked = slice.length > 0 && slice.every((u) => selected.has(u.key));
@@ -277,6 +283,18 @@
     download(`x-following-${(data.owner && data.owner.handle) || 'me'}-${S.dayKey()}.csv`, `\ufeff${toCsv([head, ...rows])}`, 'text/csv');
   };
 
+  function failedToRequeue() {
+    const queued = new Set(data.queue.filter((q) => q.action !== 'follow').map((q) => q.key));
+    return Object.values(data.users).filter((u) => u.unfollowFailed && !data.whitelist[u.key] && !queued.has(u.key));
+  }
+
+  $('requeueFailed').onclick = () => act($('requeueFailed'), async () => {
+    const keys = failedToRequeue().map((u) => u.handle);
+    if (!keys.length) return;
+    const r = await send({ type: 'xa:enqueue', keys, action: 'unfollow' });
+    flash($('userSummary'), `已重新加入 ${r.added} 人，队列共 ${r.total} 人。${enqueueNote(r)}`);
+  });
+
   $('enqueueBtn').onclick = () => act($('enqueueBtn'), async () => {
     if (!selected.size) throw new Error('先勾选要取关的人。');
     const keys = [...selected].map((k) => data.users[k] || k).map((u) => (typeof u === 'string' ? u : u.handle));
@@ -304,9 +322,10 @@
     $('collectBtn').disabled = !!running;
     $('stopCollectBtn').hidden = !running;
     if (!c) { $('collectMsg').textContent = ''; return; }
-    const when = c.finishedAt ? `，${fmtTime(c.finishedAt)}` : '';
-    const extra = c.status === 'done' && c.removed ? `，移除了 ${c.removed} 个已不再关注的人` : '';
-    $('collectMsg').textContent = `${c.message || ''}${c.count != null ? `（本地共 ${c.count} 人${extra}）` : ''}${when}`;
+    const when = c.finishedAt ? `（${fmtTime(c.finishedAt)}）` : '';
+    // 读取完成的提示里已经带了人数，其他状态补上本地现有人数。
+    const local = c.status !== 'done' && c.count != null ? `，本地共 ${c.count} 人` : '';
+    $('collectMsg').textContent = `${c.message || ''}${local}${when}`;
   }
   $('collectBtn').onclick = () => act($('collectBtn'), () => send({ type: 'xa:collect' }));
   $('stopCollectBtn').onclick = () => act($('stopCollectBtn'), () => send({ type: 'xa:stopCollect' }));
@@ -423,21 +442,6 @@
     trippedWaiting = waiting;
   }, 1000);
 
-  // ---------- 推文体检 ----------
-  $('checkText').addEventListener('input', () => {
-    const t = $('checkText').value;
-    $('checkCount').textContent = t ? `计数长度 ${window.XARules.weightedLength(t)} / 280` : '';
-  });
-  $('checkBtn').onclick = () => {
-    const text = $('checkText').value.trim();
-    if (!text) return;
-    const out = $('checkOut');
-    out.innerHTML = '';
-    const box = document.createElement('div');
-    out.appendChild(box);
-    window.XAPanel.open({ text, container: box, floating: false, dark: matchMedia('(prefers-color-scheme: dark)').matches });
-  };
-
   // ---------- 日志 ----------
   const OK = new Set(['ok', 'dry_run', 'pending']);
   const SKIP = new Set(['already', 'gone', 'mismatch', 'interrupted']);
@@ -513,31 +517,6 @@
   }
 
   // ---------- 设置 ----------
-  const PRESETS = {
-    anthropic: { provider: 'anthropic', baseUrl: 'https://api.anthropic.com', model: 'claude-opus-5-5' },
-    deepseek: { provider: 'openai', baseUrl: 'https://api.deepseek.com', model: 'deepseek-chat' },
-    qwen: { provider: 'openai', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-plus' },
-    ollama: { provider: 'openai', baseUrl: 'http://localhost:11434/v1', model: 'qwen2.5:7b' },
-    openai: { provider: 'openai', baseUrl: 'https://api.openai.com/v1', model: '' },
-  };
-  const PRESET_LABELS = { anthropic: 'Claude 官方', deepseek: 'DeepSeek', qwen: '通义千问', ollama: '本机 Ollama', openai: 'OpenAI' };
-  $('preset').innerHTML += Object.entries(PRESET_LABELS).map(([k, v]) => `<option value="${k}">${v}</option>`).join('');
-  $('preset').onchange = () => {
-    const p = PRESETS[$('preset').value];
-    if (!p) return;
-    $('provider').value = p.provider;
-    $('baseUrl').value = p.baseUrl;
-    $('model').value = p.model;
-    $('effortRow').hidden = p.provider !== 'anthropic';
-    $('preset').value = '';
-  };
-  $('provider').onchange = () => {
-    const isA = $('provider').value === 'anthropic';
-    $('effortRow').hidden = !isA;
-    if (isA) { $('baseUrl').value = PRESETS.anthropic.baseUrl; $('model').value = PRESETS.anthropic.model; }
-    else if (/anthropic\.com/.test($('baseUrl').value)) { $('baseUrl').value = ''; $('model').value = ''; }
-  };
-
   function fillSettings() {
     const s = data.settings;
     for (const k of Object.keys(S.LIMITS)) $(k).value = s.pace[k];
@@ -547,41 +526,10 @@
     $('dryRun').checked = !!s.dryRun;
     $('execMode').value = s.execMode;
     $('keepAwake').checked = !!s.keepAwake;
-    $('provider').value = s.llm.provider;
-    $('baseUrl').value = s.llm.baseUrl;
-    $('model').value = s.llm.model;
-    $('effort').value = s.llm.effort || '';
-    $('apiKey').value = s.llm.apiKey || '';
-    $('effortRow').hidden = s.llm.provider !== 'anthropic';
-    $('composeButton').checked = !!s.ui.composeButton;
-    $('tweetButtons').checked = !!s.ui.tweetButtons;
     for (const k of Object.keys(S.LIMITS)) $(k).title = `范围 ${S.LIMITS[k][0]}–${S.LIMITS[k][1]}`;
   }
 
-  function formLlm() {
-    return {
-      provider: $('provider').value,
-      baseUrl: $('baseUrl').value.trim(),
-      model: $('model').value.trim(),
-      effort: $('effort').value,
-      apiKey: $('apiKey').value.trim(),
-    };
-  }
-
-  async function ensureHostPermission(baseUrl) {
-    if (!baseUrl) return true;
-    let origin;
-    try { origin = new URL(baseUrl).origin; } catch { throw new Error('接口地址格式不对。'); }
-    const pattern = `${origin}/*`;
-    if (await chrome.permissions.contains({ origins: [pattern] })) return true;
-    const ok = await chrome.permissions.request({ origins: [pattern] });
-    if (!ok) throw new Error(`没有授权访问 ${origin}，体检时无法调用这个接口。`);
-    return true;
-  }
-
   $('saveBtn').onclick = () => act($('saveBtn'), async () => {
-    const llm = formLlm();
-    await ensureHostPermission(llm.baseUrl);
     const pace = {};
     for (const k of Object.keys(S.LIMITS)) pace[k] = Number($(k).value);
     const next = S.mergeSettings({
@@ -593,8 +541,6 @@
       dryRun: $('dryRun').checked,
       execMode: $('execMode').value,
       keepAwake: $('keepAwake').checked,
-      llm,
-      ui: { composeButton: $('composeButton').checked, tweetButtons: $('tweetButtons').checked },
     });
     await chrome.storage.local.set({ settings: next });
     data.settings = next;
@@ -603,22 +549,8 @@
     flash($('saveMsg'), adjusted ? '已保存。部分节奏超出安全范围，已自动调整。' : '已保存。', 4000);
   });
 
-  $('pingBtn').onclick = () => act($('pingBtn'), async () => {
-    const llm = formLlm();
-    await ensureHostPermission(llm.baseUrl);
-    $('pingMsg').textContent = '测试中…';
-    try {
-      await send({ type: 'xa:ping', llm });
-      $('pingMsg').textContent = '连接成功。记得点「保存设置」。';
-    } catch (e) {
-      $('pingMsg').textContent = `失败：${e.message}`;
-    }
-  });
-
   $('exportAll').onclick = async () => {
     const all = await chrome.storage.local.get(null);
-    if (all.settings && all.settings.llm) all.settings.llm.apiKey = all.settings.llm.apiKey ? '（已隐去）' : '';
-    delete all.cache;
     download(`x-assistant-data-${S.dayKey()}.json`, JSON.stringify(all, null, 2), 'application/json');
   };
   $('clearUsers').onclick = async () => {
@@ -626,11 +558,6 @@
     selected.clear();
     await chrome.storage.local.set({ users: {} });
   };
-  $('clearCache').onclick = async () => {
-    await chrome.storage.local.set({ cache: {} });
-    alert('已清空。');
-  };
-
   // ---------- 启动 ----------
   (async function init() {
     await loadAll();

@@ -161,6 +161,18 @@
     return found;
   }
 
+  // 响应里有没有时间线结构（instructions）。X 出错时有时只返回 data:{user:{}}，不能当成「列表读完了」。
+  function hasTimeline(data) {
+    let found = false;
+    (function walk(o, depth) {
+      if (found || !o || typeof o !== 'object' || depth > 20) return;
+      if (Array.isArray(o)) { for (const x of o) walk(x, depth + 1); return; }
+      if (Array.isArray(o.instructions)) { found = true; return; }
+      for (const k of Object.keys(o)) walk(o[k], depth + 1);
+    })(data, 0);
+    return found;
+  }
+
   // ---------- 结果判断 ----------
 
   function errorsOf(r) {
@@ -200,7 +212,7 @@
   }
 
   root.XAPI = {
-    WEB_BEARER, DEFAULT_FEATURES, friendshipRequest, settingsRequest, followingRequest, buildFeatures, findOperation,
+    WEB_BEARER, DEFAULT_FEATURES, friendshipRequest, settingsRequest, followingRequest, buildFeatures, findOperation, hasTimeline,
     fromGraphQLUser, parseGraphQLUsers, bottomCursor, classifyFriendship, apiUnavailable,
   };
 })(typeof globalThis !== 'undefined' ? globalThis : self);
