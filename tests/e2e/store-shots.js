@@ -145,7 +145,7 @@ async function until(fn, ms, label) {
       <div style="flex:1;padding:120px 64px 0">
         <div style="font-size:40px;font-weight:700;line-height:1.25">AI / Web3 热点<br>一键写推文草稿</div>
         <ul style="font-size:20px;line-height:1.9;color:#cfd9de;margin-top:32px;padding-left:22px">
-          <li>汇总你的 X 列表、首页推文和新闻源</li><li>同一件事自动合并，按热度排序</li>
+          <li>X 趋势榜、博主列表、社区和新闻一起看</li><li>同一件事自动合并，显示上榜依据</li>
           <li>用你自己的模型 key，三种风格可改可发</li><li>只填进发推框，从不自动发推</li></ul></div>
       <iframe src="${url}" style="width:420px;height:800px;border:0;background:#f7f9f9"></iframe></div>`;
     document.body.style.margin = '0';

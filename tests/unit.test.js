@@ -258,8 +258,10 @@ test('X 的字数算法和发推链接', () => {
 });
 
 test('需要授权的网站', () => {
-  const o = XATrends.originsFor({ sources: { hn: true, hf: false, gh: false, cg: true, rss: true }, rss: { ai: ['https://a.com/feed'], web3: [] } });
+  const o = XATrends.originsFor({ sources: { hn: true, hf: false, hfm: false, reddit: false, gh: false, cg: true, rss: true }, rss: { ai: ['https://a.com/feed'], web3: [] } });
   assert.deepStrictEqual(o.sort(), ['https://a.com/*', 'https://api.coingecko.com/*', 'https://hn.algolia.com/*']);
+  const all = XATrends.originsFor({});
+  assert.ok(all.includes('https://www.reddit.com/*') && all.includes('https://huggingface.co/*'));
   assert.strictEqual(XALLM.originOf({ provider: 'deepseek' }), 'https://api.deepseek.com/*');
   assert.strictEqual(XALLM.originOf({ provider: 'custom', baseUrl: 'http://insecure' }), null);
 });
@@ -308,3 +310,65 @@ test('提示词带上资料、语言和账号定位', () => {
   assert.match(q.user, /@kol：GPT-6!/);
 });
 
+
+test('新来源：X 趋势榜、Hugging Face 热门模型、Reddit', () => {
+  const data = { data: { explore_sidebar: { timeline: { instructions: [{ entries: [
+    { content: { items: [
+      { item: { itemContent: { itemType: 'TimelineTrend', name: '#GPT6', trend_metadata: { domain_context: 'Technology · Trending', meta_description: '12.3K posts' } } } },
+      { item: { itemContent: { itemType: 'TimelineTrend', name: 'Bitcoin', trend_metadata: { domain_context: 'Cryptocurrency · Trending', meta_description: '1.2万 帖子' } } } },
+      { item: { itemContent: { itemType: 'TimelineTrend', name: 'Taylor Swift', trend_metadata: { domain_context: 'Music · Trending', meta_description: '80K posts' } } } },
+    ] } },
+  ] }] } } } };
+  const trends = XAPI.parseTrends(data);
+  assert.deepStrictEqual(trends.map((t) => [t.name, t.rank]), [['#GPT6', 1], ['Bitcoin', 2], ['Taylor Swift', 3]]);
+  const items = trends.map((t) => XATrends.xTrendItem(t, 1)).filter(Boolean);
+  assert.deepStrictEqual(items.map((i) => [i.name, i.topic, i.posts]), [['#GPT6', 'ai', 12300], ['Bitcoin', 'web3', 12000]]);
+  assert.strictEqual(XATrends.parsePostCount('1,234 posts'), 1234);
+  assert.strictEqual(XATrends.parsePostCount('2.5M posts'), 2500000);
+
+  const m = XATrends.parseHFModels([{ id: 'Qwen/Qwen4-7B-Instruct', trendingScore: 300, likes: 10, pipeline_tag: 'text-generation' }, { id: 'meta-llama/Llama-4-Scout' }], 1);
+  assert.deepStrictEqual(m.map((x) => x.keys), [['qwen4'], ['llama4']]);
+  assert.strictEqual(m[0].url, 'https://huggingface.co/Qwen/Qwen4-7B-Instruct');
+
+  const r = XATrends.parseReddit({ data: { children: [
+    { data: { id: 'a', title: 'Qwen4 7B beats everything locally', permalink: '/r/LocalLLaMA/comments/a/x/', url: 'https://qwenlm.github.io/blog/qwen4', score: 900, num_comments: 300, created_utc: 1760000000 } },
+    { data: { id: 'b', title: 'Weekly thread', stickied: true } },
+  ] } }, 'LocalLLaMA', 'ai');
+  assert.strictEqual(r.length, 1);
+  assert.strictEqual(r[0].url, 'https://www.reddit.com/r/LocalLLaMA/comments/a/x/');
+  assert.deepStrictEqual(r[0].links, ['https://qwenlm.github.io/blog/qwen4']);
+  assert.strictEqual(r[0].feed, 'r/LocalLLaMA');
+});
+
+test('打分去偏：大号打折、同一博主只算一个声音、只在关注圈里的话题打折、趋势词能和推文归到一起', () => {
+  const now = Date.parse('2026-10-22T06:00:00Z');
+  const h = (n) => now - n * 3600000;
+  const tw = (id, handle, text, likes, followers, src) => XATrends.tweetItem({ id, handle, text, likes, retweets: 0, replies: 0, quotes: 0, views: 0, followers, createdAt: h(2), urls: [] }, 'ai', src || 'x');
+  // 粉丝 500 万的大号 1 万赞，不一定比粉丝 2000 的小号 3000 赞更「热」
+  const big = tw('1', 'big', 'aaa', 10000, 5000000);
+  const small = tw('2', 'small', 'bbb', 3000, 2000);
+  assert.ok(XATrends.velocity(small, now) > XATrends.velocity(big, now));
+
+  // 同一个博主刷屏：不比两个不同的人讲同一件事更热
+  const spam = ['11', '12', '13'].map((id) => tw(id, 'same', 'Gemini 4 Ultra launches today with video understanding', 500, 1000));
+  const two = [tw('21', 'p1', 'Claude Opus agentic coding upgrade lands for teams', 500, 1000), tw('22', 'p2', 'Claude Opus agentic coding upgrade is impressive for teams', 500, 1000)];
+  const ts = XATrends.buildTopics([...spam, ...two], now).ai;
+  const spamT = ts.find((t) => /Gemini/.test(t.title));
+  const twoT = ts.find((t) => /Claude/.test(t.title));
+  assert.strictEqual(spamT.why.authors, 1);
+  assert.strictEqual(twoT.why.authors, 2);
+  assert.ok(twoT.heat > spamT.heat);
+  assert.ok(spamT.why.personalOnly);
+
+  // X 趋势词 #GPT6 和讲 GPT-6 的推文、新闻是同一件事
+  const xt = XATrends.xTrendItem({ name: '#GPT6', domain: 'Technology', meta: '50K posts', rank: 1, seenAt: h(1) }, now);
+  const items = [xt, tw('31', 'a1', 'GPT-6 is out and the reasoning mode is great', 800, 10000),
+    { id: 'reddit:x', source: 'reddit', topic: 'ai', title: 'OpenAI GPT-6 discussion', url: 'https://www.reddit.com/r/x', t: h(2), points: 500, comments: 200, feed: 'r/LocalLLaMA' }];
+  const g = XATrends.buildTopics(items, now).ai;
+  assert.strictEqual(g.length, 1);
+  assert.strictEqual(g[0].why.xPosts, 50000);
+  assert.ok(!g[0].why.personalOnly);
+  assert.strictEqual(g[0].title, 'OpenAI GPT-6 discussion'); // 有社区帖子标题时用它
+  // 太短的趋势词不乱配
+  assert.strictEqual(XATrends.buildTopics([XATrends.xTrendItem({ name: 'Sam', domain: 'Technology AI' }, now), tw('41', 'z', 'sam altman says AI', 10, 10)], now).ai.length, 2);
+});

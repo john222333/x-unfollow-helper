@@ -24,7 +24,9 @@
   <main>
     <div class="banner" id="offBanner" hidden>热点功能已关闭，可以在设置里打开。</div>
     <div class="banner" id="keyBanner" hidden>填写你自己的模型 API key 后，就能一键生成推文草稿。<button class="link" data-go="settings">去设置</button></div>
-    <div class="banner soft" id="listBanner" hidden>提示：在设置里登记你关注的 AI / Web3 博主列表（X 列表），热度会更准。没有登记时只用你在 x.com 首页刷到的推文和外部新闻源。</div>
+    <div class="banner soft" id="listBanner" hidden>提示：在设置里登记你关注的 AI / Web3 博主列表（X 列表），能看到圈内博主的第一手讨论。没有登记时用 X 趋势榜、你在首页刷到的推文和外部新闻、社区来源。</div>
+    <details class="sources" id="sources" hidden><summary id="sourcesSum"></summary><ul id="sourceList"></ul>
+      <p class="muted small">热度怎么算：每条内容先在自己的来源里按增长速度排名（推文看点赞、转发、浏览的增速，并按作者粉丝数打折；HN、Reddit 看得分和评论增速），再看有多少互相独立的来源在讲同一件事。同一个博主发多条只算一次；只有一个来源、或者只出现在你关注圈里的话题会打折。</p></details>
     <details class="errors" id="errors" hidden><summary id="errorsSum"></summary><ul id="errorList"></ul></details>
     <div id="topics"></div>
     <p class="muted small empty" id="empty" hidden></p>

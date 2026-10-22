@@ -535,7 +535,7 @@
   const XL = window.XALLM;
   let hasKey = false;
   const lines = (id) => $(id).value.split(/[\n,，\s]+/).map((x) => x.trim()).filter(Boolean);
-  const SRC_IDS = { home: 'srcHome', hn: 'srcHn', hf: 'srcHf', gh: 'srcGh', cg: 'srcCg', rss: 'srcRss' };
+  const SRC_IDS = { xtrend: 'srcXtrend', home: 'srcHome', hn: 'srcHn', reddit: 'srcReddit', hf: 'srcHf', hfm: 'srcHfm', gh: 'srcGh', cg: 'srcCg', rss: 'srcRss' };
 
   $('llmProvider').innerHTML = Object.entries(XL.PROVIDERS).map(([k, v]) => `<option value="${k}">${esc(v.label)}</option>`).join('');
 

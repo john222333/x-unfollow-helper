@@ -18,6 +18,7 @@ X 取关助手（以下称「本插件」）是一个开源的 Chrome 插件，�
 | X 网页版的接口参数（GraphQL 的 queryId 和 features，以及网页版公开的应用令牌） | X 更新网页版后仍能读取关注列表 | 只在你的浏览器里 |
 | x.com 的登录 cookie（`ct0`、`twid`） | 在 x.com 页面里发请求时，像网页版一样带上防伪令牌、识别当前账号 | **不保存**，只在发请求的那一刻在页面里读取 |
 | 热点功能：你登记的 X 列表里的公开推文，以及你在 x.com 首页刷到的、和 AI / Web3 有关的公开推文（作者用户名、正文、互动数、发布时间） | 计算热度、生成话题 | 只在你的浏览器里，最多保留 3 天、1500 条；和 AI / Web3 无关的推文不保存 |
+| 热点功能：X 趋势榜上的趋势词和帖子数（你打开 x.com 首页或探索页时，从页面已经加载的数据里记下） | 计算热度 | 只在你的浏览器里，只留最近 6 小时 |
 | 热点功能：从公开新闻源读到的标题、链接和摘要 | 计算热度、生成话题 | 只在你的浏览器里 |
 | 你填写的模型 API key | 生成推文草稿时调用你选的模型服务商 | 只在你的浏览器里，不放进设置，导出数据时也不包含 |
 
@@ -31,7 +32,7 @@ X 取关助手（以下称「本插件」）是一个开源的 Chrome 插件，�
 
 热点功能（可以在设置里关闭）会额外连接下面这些网站。它们都是可选权限：只有你在设置里点「保存」并在浏览器弹出的对话框里同意后，插件才能访问。
 
-- 公开数据源，只读取公开内容，不发送你的任何数据：`hn.algolia.com`（Hacker News）、`huggingface.co`（每日论文）、`api.github.com`（新项目）、`api.coingecko.com`（热搜币），以及你在设置里填写的 RSS 地址（默认 `cointelegraph.com`、`decrypt.co`）。
+- 公开数据源，只读取公开内容，不发送你的任何数据：`hn.algolia.com`（Hacker News）、`huggingface.co`（每日论文、热门模型榜）、`www.reddit.com`（几个 AI / 加密社区的热门帖子）、`api.github.com`（新项目）、`api.coingecko.com`（热搜币），以及你在设置里填写的 RSS 地址（默认 `cointelegraph.com`、`decrypt.co`）。
 - 你自己选的模型服务商（例如 `api.anthropic.com`、`api.openai.com`、`api.deepseek.com` 或你填写的地址）：只在你点「写推文」「引用」或「测试连接」时，把话题标题、相关的公开推文和新闻摘要、你填写的账号定位，连同你的 API key 直接发给这个服务商。服务商如何处理这些内容，以它自己的隐私政策为准。
 
 除此之外本插件不连接其他任何服务器，不使用任何统计、分析或广告服务，不加载远程代码。
@@ -70,6 +71,7 @@ Unfollow Helper for X ("the extension") is an open-source Chrome extension that 
 | X web app request parameters (GraphQL queryId and features, and the web app's public app token) | Keep reading the Following list working after X updates its web app | Only in your browser |
 | x.com login cookies (`ct0`, `twid`) | Sent with requests made from inside an x.com page, exactly like the X web app does, and used to identify the current account | **Never stored**; read in the page only at the moment of a request |
 | Trends: public posts from X lists you register, and AI/Web3-related public posts you see on your x.com home timeline (author handle, text, engagement counts, time) | Scoring and grouping trending topics | Only in your browser, at most 3 days / 1,500 posts; unrelated posts are not kept |
+| Trends: X trending topics and post counts (recorded from data the x.com home or Explore page already loaded) | Scoring trending topics | Only in your browser, last 6 hours only |
 | Trends: titles, links and summaries from public news sources | Scoring and grouping trending topics | Only in your browser |
 | The model API key you enter | Calling the model provider you chose to draft posts | Only in your browser; kept out of settings and data exports |
 
@@ -83,7 +85,7 @@ Unfollowing only contacts X's own servers:
 
 The trends feature (can be turned off in Settings) also contacts the sites below. They are optional permissions: the extension can reach them only after you click Save in Settings and approve the browser's permission prompt.
 
-- Public data sources, read-only, no data of yours is sent: `hn.algolia.com` (Hacker News), `huggingface.co` (daily papers), `api.github.com` (new projects), `api.coingecko.com` (trending coins), and the RSS feeds you configure (by default `cointelegraph.com` and `decrypt.co`).
+- Public data sources, read-only, no data of yours is sent: `hn.algolia.com` (Hacker News), `huggingface.co` (daily papers, trending models), `www.reddit.com` (hot posts in a few AI / crypto communities), `api.github.com` (new projects), `api.coingecko.com` (trending coins), and the RSS feeds you configure (by default `cointelegraph.com` and `decrypt.co`).
 - The model provider you choose (for example `api.anthropic.com`, `api.openai.com`, `api.deepseek.com`, or an address you enter): only when you click Draft, Quote or Test connection, the topic title, related public posts and article summaries, and the account description you wrote are sent directly to that provider together with your API key. The provider's own privacy policy applies to that content.
 
 Otherwise the extension contacts no other server, uses no analytics, tracking or advertising services, and loads no remote code.

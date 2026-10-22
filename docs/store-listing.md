@@ -43,7 +43,7 @@
 • 重新读取会同步：已经不再关注的人自动移出列表，取关没生效的人会标出来
 
 AI / Web3 热点侧边栏
-• 汇总你登记的 X 列表、你刷到的首页推文、Hacker News、Hugging Face 论文、GitHub 新项目、CoinGecko 热搜和 RSS 新闻，按热度排序
+• 汇总 X 趋势榜、你登记的 X 列表、Hacker News、Reddit、Hugging Face 论文和热门模型、GitHub 新项目、CoinGecko 热搜和 RSS 新闻，按热度排序，并显示每个话题的上榜依据
 • 讲同一件事的推文和新闻合并成一个话题
 • 用你自己的模型 API key（Claude、OpenAI、DeepSeek 等）一键生成推文草稿，填进 X 的发推框，由你决定发不发；插件从不自动发推
 
@@ -70,7 +70,7 @@ Features
 • Re-reading syncs the list: accounts you no longer follow are removed, and unfollows that didn't take effect are flagged
 
 AI / Web3 trends side panel
-• Rising topics from X lists you register, posts on your home timeline, Hacker News, Hugging Face papers, new GitHub projects, CoinGecko trending and RSS news, ranked by heat
+• Rising topics from X trends, X lists you register, Reddit, Hacker News, Hugging Face papers, new GitHub projects, CoinGecko trending and RSS news, ranked by heat
 • Posts and articles about the same story are merged into one topic
 • Draft posts with your own model API key (Claude, OpenAI, DeepSeek and more). Drafts open in X's compose box; the extension never posts for you
 
@@ -118,7 +118,7 @@ Helps users manage their own X (x.com) account: clean up their Following list (r
 | `power` | 任务进行中阻止电脑自动休眠（屏幕仍会关闭），避免任务被打断；用户可以在设置里关闭。Keeps the system awake while a job is running so it isn't interrupted; the user can turn this off. |
 | 网站权限 `https://x.com/*` | 在 x.com 页面里读取关注列表、执行用户选择的取关，并核对登录的账号。Reads the Following list, performs the unfollows the user chose, and checks the logged-in account on x.com. |
 | `sidePanel` | 在浏览器侧边栏显示 AI / Web3 热点和推文草稿，用户可以一边看 x.com 一边写。Shows the trends and post drafts in the browser side panel next to x.com. |
-| 可选网站权限 `https://*/*`（只在用户点「保存」时按需申请具体网站） | 热点功能读取用户勾选的公开新闻源（Hacker News、Hugging Face、GitHub、CoinGecko、用户填写的 RSS），以及调用用户自己选择、自己提供 key 的模型服务商生成草稿。每个网站都要用户在浏览器对话框里同意，不开热点功能就不会申请。Optional, requested per site only when the user saves settings: reads the public news sources the user enables and calls the model provider the user chose with their own API key. Each site requires the user's approval in the browser prompt. |
+| 可选网站权限 `https://*/*`（只在用户点「保存」时按需申请具体网站） | 热点功能读取用户勾选的公开新闻源（Hacker News、Reddit、Hugging Face、GitHub、CoinGecko、用户填写的 RSS），以及调用用户自己选择、自己提供 key 的模型服务商生成草稿。每个网站都要用户在浏览器对话框里同意，不开热点功能就不会申请。Optional, requested per site only when the user saves settings: reads the public news sources the user enables and calls the model provider the user chose with their own API key. Each site requires the user's approval in the browser prompt. |
 | 网站权限 `https://abs.twimg.com/*` | 下载 X 网页版公开的 JavaScript 文件（只读取文本，不执行），找到读取关注列表需要的接口参数。Downloads X's public web app JavaScript as text (never executed) to find the request parameters needed to read the Following list. |
 
 **是否使用远程代码（Remote code）**：否（No）。所有代码都打包在插件里。

@@ -156,9 +156,12 @@
           <label>Web3 博主列表 <span style="flex:1"><textarea id="listsWeb3" rows="2" placeholder="每行一个 X 列表链接"></textarea></span></label>
           <p class="muted small">在 X 上建一个列表（公开或私密都行），把你认可的 AI 或 Web3 博主加进去，再把列表链接贴到这里。插件借用你开着的 x.com 页面读取列表里的最新推文，按互动增速算热度；最多各 5 个列表。不登记也能用，只是热度来自你刷到的首页推文和下面的外部来源。</p>
           <div class="checks">
-            <label class="check"><input type="checkbox" id="srcHome"> 我在 x.com 首页刷到的 AI / Web3 推文</label>
+            <label class="check" title="X 全站的趋势榜，不受你关注了谁影响。打开 x.com 首页或探索页时记下来"><input type="checkbox" id="srcXtrend"> X 趋势榜（全站统计）</label>
+            <label class="check" title="取决于你关注了谁，计算热度时权重较低"><input type="checkbox" id="srcHome"> 我在 x.com 首页刷到的 AI / Web3 推文</label>
             <label class="check"><input type="checkbox" id="srcHn"> Hacker News 首页（AI 相关）</label>
+            <label class="check"><input type="checkbox" id="srcReddit"> Reddit（r/LocalLLaMA、r/MachineLearning、r/CryptoCurrency）</label>
             <label class="check"><input type="checkbox" id="srcHf"> Hugging Face 每日论文</label>
+            <label class="check"><input type="checkbox" id="srcHfm"> Hugging Face 热门模型榜</label>
             <label class="check"><input type="checkbox" id="srcGh"> GitHub 一周内新起的大模型项目</label>
             <label class="check"><input type="checkbox" id="srcCg"> CoinGecko 热搜币</label>
             <label class="check"><input type="checkbox" id="srcRss"> 下面的 RSS 新闻源</label>

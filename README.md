@@ -17,7 +17,7 @@
 - **自动保护**：X 提示操作频繁、登录失效、账号被锁、出现人机验证时立刻停下，24 小时内不再继续。
 - **可撤销**：日志里勾选取关过的人，一键重新关注。
 - **重新读取会同步**：已经不再关注的人会从列表里移除；日志显示取关成功、X 上却还在关注的人会标成「取关未生效」，可以一键重新取关。
-- **AI / Web3 热点（侧边栏）**：来源包括你登记的 X 列表（按点赞、转发、浏览的增速算热度）、你在 x.com 首页刷到的相关推文、Hacker News、Hugging Face 每日论文、GitHub 新项目、CoinGecko 热搜和 RSS 新闻源。讲同一件事的推文和新闻会合并成一个话题，按热度排序。
+- **AI / Web3 热点（侧边栏）**：来源包括 X 全站趋势榜、你登记的 X 列表（按点赞、转发、浏览的增速算热度）、你在 x.com 首页刷到的相关推文、Hacker News、Reddit、Hugging Face 每日论文和热门模型榜、GitHub 新项目、CoinGecko 热搜和 RSS 新闻源。讲同一件事的内容会合并成一个话题；热度看增速和有多少互相独立的来源在讲，大号、刷屏和只在你关注圈里的内容会打折，每个话题都显示上榜依据。
 - **推文草稿**：每个话题一键生成观点、科普、轻松三种风格的草稿，也可以针对某条热门推文写引用。支持 Claude、OpenAI、DeepSeek 和兼容 OpenAI 接口的其他模型，key 只存在本地。插件不会替你发推。
 
 ## 安装
@@ -145,7 +145,7 @@ npm run zip          # 打包上架用的 zip（只包含插件运行需要的�
 - **Account check.** Nothing happens if the logged-in account isn't the owner of the list.
 - **Undo.** Re-follow anyone from the log.
 - **Re-reading syncs the list.** Accounts you no longer follow are removed. Accounts the log says were unfollowed but X still lists are tagged so you can retry them.
-- **AI / Web3 trends side panel.** Collects rising topics from X lists you register, AI/Web3 posts you scroll past on your home timeline, Hacker News, Hugging Face daily papers, new GitHub projects, CoinGecko trending and RSS feeds, merges posts and articles about the same story, and drafts posts with your own model API key (Claude, OpenAI, DeepSeek or any OpenAI-compatible endpoint). Drafts open in X's compose box; the extension never posts for you.
+- **AI / Web3 trends side panel.** Collects rising topics from X's site-wide trends, Reddit, Hugging Face trending models, X lists you register, AI/Web3 posts you scroll past on your home timeline, Hacker News, Hugging Face daily papers, new GitHub projects, CoinGecko trending and RSS feeds, merges posts and articles about the same story, and drafts posts with your own model API key (Claude, OpenAI, DeepSeek or any OpenAI-compatible endpoint). Drafts open in X's compose box; the extension never posts for you.
 - **Private.** Everything stays in your browser. Unfollowing only talks to X's own servers (x.com, abs.twimg.com, and pbs.twimg.com for avatars). The trends panel reads the public sources you enable and sends topic material to the model provider you choose, only after you grant access. No server of its own, no analytics. See [PRIVACY.md](PRIVACY.md).
 
 The UI is currently Chinese only. Install from source: open `chrome://extensions`, turn on Developer mode, click **Load unpacked**, and select the folder containing `manifest.json`.

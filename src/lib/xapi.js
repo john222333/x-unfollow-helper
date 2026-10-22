@@ -239,6 +239,27 @@
     return out;
   }
 
+  // X 趋势榜（首页右侧「有什么新鲜事」、探索页）里的趋势词，按出现顺序带上名次。
+  function parseTrends(data) {
+    const out = [];
+    const seen = new Set();
+    (function walk(o, depth) {
+      if (!o || typeof o !== 'object' || depth > 60) return;
+      if (Array.isArray(o)) { for (const x of o) walk(x, depth + 1); return; }
+      if ((o.itemType === 'TimelineTrend' || o.__typename === 'TimelineTrend') && typeof o.name === 'string') {
+        const key = o.name.toLowerCase();
+        if (!seen.has(key)) {
+          seen.add(key);
+          const m = o.trend_metadata || {};
+          out.push({ name: o.name, domain: m.domain_context || '', meta: m.meta_description || '', rank: out.length + 1 });
+        }
+        return;
+      }
+      for (const k of Object.keys(o)) walk(o[k], depth + 1);
+    })(data, 0);
+    return out;
+  }
+
   // ---------- 结果判断 ----------
 
   function errorsOf(r) {
@@ -280,6 +301,6 @@
   root.XAPI = {
     WEB_BEARER, DEFAULT_FEATURES, friendshipRequest, settingsRequest, followingRequest, buildFeatures, findOperation, hasTimeline,
     fromGraphQLUser, parseGraphQLUsers, bottomCursor, classifyFriendship, apiUnavailable,
-    listTweetsRequest, fromGraphQLTweet, parseTweets,
+    listTweetsRequest, fromGraphQLTweet, parseTweets, parseTrends,
   };
 })(typeof globalThis !== 'undefined' ? globalThis : self);

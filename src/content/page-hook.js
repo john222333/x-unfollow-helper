@@ -6,7 +6,8 @@
   window.__xaHookInstalled = true;
 
   // 首页和列表的推文用于热点功能：你平时刷到的 AI / Web3 推文也会算进热度里。
-  const WATCH = /\/graphql\/[^/]+\/(Following|HomeTimeline|HomeLatestTimeline|ListLatestTweetsTimeline)\b/;
+  // 趋势榜（ExploreSidebar 是首页右侧的「有什么新鲜事」）是 X 全站的统计，用来让热点更客观。
+  const WATCH = /\/graphql\/[^/]+\/(Following|HomeTimeline|HomeLatestTimeline|ListLatestTweetsTimeline|ExploreSidebar|ExplorePage|GenericTimelineById)\b/;
 
   // 插件的内容脚本比这里晚加载，先到的数据缓存几份，等它来要时再发一遍。
   const buffer = [];

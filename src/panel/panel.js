@@ -39,6 +39,25 @@
   // 引用推文时，推文链接会附在正文后面，也占 24 个字符。
   const draftLength = (text, quoteUrl) => T.weightedLength(text) + (quoteUrl ? 24 : 0);
 
+  function srcName(k) {
+    if (k === 'x') return 'X 列表';
+    if (k.startsWith('rss:')) return k.slice(4);
+    if (k.startsWith('reddit:')) return `Reddit ${k.slice(7)}`;
+    return T.SOURCE_LABELS[k] || k;
+  }
+
+  // 「为什么上榜」：有多少互相独立的来源在讲这件事。
+  function whyLine(tp) {
+    const w = tp.why || {};
+    const parts = [];
+    if (w.xPosts) parts.push(`X 趋势 ${fmt(w.xPosts)} 帖`);
+    if (w.outlets) parts.push(`${w.outlets} 个媒体或社区`);
+    if (w.authors) parts.push(`${w.authors} 位博主`);
+    if (w.engagement) parts.push(`推文互动 ${fmt(w.engagement)}`);
+    if (w.personalOnly) parts.push('只出现在你的关注圈');
+    return parts.join(' · ');
+  }
+
   // ---------- 数据 ----------
 
   async function load(auto) {
@@ -72,11 +91,21 @@
     else if (st.at) $('status').textContent = `更新于 ${ago(st.at)} · 共 ${total} 条内容`;
     else $('status').textContent = '还没有读取过，点「刷新」开始。';
 
+    // 每个来源这次读到多少条：让你看清热度是从哪儿来的。
+    const counts = Object.entries(st.counts || {}).sort((a, b) => b[1] - a[1]);
+    $('sources').hidden = !counts.length;
+    $('sourcesSum').textContent = `数据来源：${counts.length} 个`;
+    $('sourceList').innerHTML = counts.map(([k, n]) => {
+      const base = k.split(':')[0];
+      const note = T.PERSONAL.has(base) ? '（取决于你关注了谁，权重较低）' : base === 'xtrend' ? '（X 全站统计，打开 x.com 首页或探索页时更新）' : '';
+      return `<li>${esc(srcName(k))}：${n} 条${note}</li>`;
+    }).join('') + (st.counts && st.counts.xtrend ? '' : '<li class="muted">X 趋势：还没读到。打开 x.com 首页（窗口宽一点，右侧有「有什么新鲜事」）或探索页就会记下来</li>');
+
     const errors = Object.entries(st.errors || {});
     $('errors').hidden = !errors.length;
     $('errorsSum').textContent = `${errors.length} 个来源这次没读到`;
     $('errorList').innerHTML = errors.map(([k, v]) => {
-      const name = k === 'x' ? 'X 列表' : k.startsWith('rss:') ? k.slice(4) : (T.SOURCE_LABELS[k] || k);
+      const name = srcName(k);
       return `<li>${esc(name)}：${esc(v)}</li>`;
     }).join('');
   }
@@ -145,6 +174,7 @@
         <div class="head"><span class="heat" title="热度：增速、跨来源讨论度综合打分">${tp.heat}</span>
           <a class="title" href="${safeUrl(tp.url)}" target="_blank">${esc(tp.title)}</a></div>
         <div class="meta">${chips}<span class="muted small">${tp.count} 条 · ${ago(tp.t)}</span></div>
+        <div class="why muted small" title="热度看三件事：最热那条内容在它自己来源里的增长速度、有多少互相独立的来源在讲、是不是只出现在你的关注圈">${esc(whyLine(tp))}</div>
         <ul class="items">${shown.map((it) => itemHtml(it, tp.id, canDraft)).join('')}</ul>
         <div class="actions">
           <button class="btn small primary" data-draft="${esc(tp.id)}" ${canDraft ? '' : 'disabled title="先在设置里填写模型 API key"'}>写推文</button>

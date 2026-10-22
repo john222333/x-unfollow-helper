@@ -97,6 +97,10 @@
       const tweets = XAPI.parseTweets(ev.data.data);
       if (tweets.length) send({ type: 'xa:tweets', op: ev.data.op, listId: ev.data.listId || null, tweets }).catch(() => {});
     }
+    if (/^(ExploreSidebar|ExplorePage|GenericTimelineById)$/.test(ev.data.op) && alive()) {
+      const trends = XAPI.parseTrends(ev.data.data);
+      if (trends.length) send({ type: 'xa:xtrends', trends }).catch(() => {});
+    }
   });
   // 本脚本加载前页面可能已经收到了第一页，让页面脚本把缓存的数据再发一遍。
   window.postMessage({ source: 'xa-content', op: 'replay' }, window.location.origin);

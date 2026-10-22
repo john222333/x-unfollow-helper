@@ -1401,6 +1401,7 @@ async function handle(msg, sender) {
       await chrome.runtime.openOptionsPage();
       return { ok: true };
     case 'xa:tweets':
+    case 'xa:xtrends':
     case 'xa:trends':
     case 'xa:trendsRefresh':
     case 'xa:draft':

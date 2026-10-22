@@ -57,6 +57,24 @@
     });
   }
 
+  // X 趋势榜：你打开 x.com 首页（右侧「有什么新鲜事」）或探索页时旁听到的。只留最近 6 小时。
+  const XTREND_KEEP_MS = 6 * 3600 * 1000;
+  async function addXTrends(list) {
+    const { trends } = await trendSettings();
+    if (!trends.enabled || !trends.sources.xtrend || !Array.isArray(list) || !list.length) return { added: 0 };
+    return tweetLock(async () => {
+      const { trendXTrends } = await store.get('trendXTrends');
+      const now = Date.now();
+      const map = Object.fromEntries(Object.entries(trendXTrends || {}).filter(([, v]) => now - (v.seenAt || 0) < XTREND_KEEP_MS));
+      for (const tr of list.slice(0, 60)) {
+        if (!tr || !tr.name) continue;
+        map[String(tr.name).toLowerCase()] = { name: String(tr.name).slice(0, 100), domain: String(tr.domain || '').slice(0, 100), meta: String(tr.meta || '').slice(0, 60), rank: Number(tr.rank) || 0, seenAt: now };
+      }
+      await store.set({ trendXTrends: map });
+      return { added: list.length };
+    });
+  }
+
   // ---------- 外部来源 ----------
 
   async function fetchWithTimeout(url, init, ms) {
@@ -105,6 +123,12 @@
     const s = trends.sources;
     if (s.hn) jobs.push(['hn', async () => T.parseHN(await getJson(T.ENDPOINTS.hn))]);
     if (s.hf) jobs.push(['hf', async () => T.parseHF(await getJson(T.ENDPOINTS.hf))]);
+    if (s.hfm) jobs.push(['hfm', async () => T.parseHFModels(await getJson(T.ENDPOINTS.hfm), now)]);
+    if (s.reddit) {
+      for (const tp of T.TOPICS) {
+        for (const sub of T.SUBREDDITS[tp]) jobs.push([`reddit:r/${sub}`, async () => T.parseReddit(await getJson(T.ENDPOINTS.reddit(sub)), sub, tp)]);
+      }
+    }
     if (s.gh) jobs.push(['gh', async () => T.parseGitHub(await getJson(T.ENDPOINTS.gh(sinceDate(7)), { accept: 'application/vnd.github+json' }))]);
     if (s.cg) jobs.push(['cg', async () => T.parseCoinGecko(await getJson(T.ENDPOINTS.cg), now)]);
     if (s.rss) {
@@ -193,7 +217,16 @@
       }
     }
     if (x.error) errors.x = x.error;
-    const { trendTweets } = await store.get('trendTweets');
+    const { trendTweets, trendXTrends } = await store.get(['trendTweets', 'trendXTrends']);
+    if (trends.sources.xtrend) {
+      for (const tr of Object.values(trendXTrends || {})) {
+        const it = T.xTrendItem(tr, now);
+        if (it) {
+          items.push(it);
+          counts.xtrend = (counts.xtrend || 0) + 1;
+        }
+      }
+    }
     for (const tw of Object.values(trendTweets || {})) {
       const it = T.tweetItem(tw, tw.topic, tw.source);
       if (it) {
@@ -272,6 +305,8 @@
     switch (msg.type) {
       case 'xa:tweets':
         return addTweets(msg.tweets, { listId: msg.listId });
+      case 'xa:xtrends':
+        return addXTrends(msg.trends);
       case 'xa:trends': {
         const [{ trends, llm }, state, key] = await Promise.all([trendSettings(), getState(), llmKey()]);
         // 侧边栏打开时：数据过期了就在后台刷新，先把旧数据给它显示。
@@ -291,5 +326,5 @@
     }
   }
 
-  self.XATrendsBG = { handle, refresh, addTweets };
+  self.XATrendsBG = { handle, refresh, addTweets, addXTrends };
 })();

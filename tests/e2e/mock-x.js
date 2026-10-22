@@ -82,6 +82,17 @@ function gqlTweet(t) {
   };
 }
 
+// 首页右侧「有什么新鲜事」：X 全站趋势榜。
+const X_TRENDS = [
+  { name: '#GPT6', domain: 'Technology · Trending', meta: '52.1K posts' },
+  { name: 'Bitcoin', domain: 'Cryptocurrency · Trending', meta: '1.2万 帖子' },
+  { name: 'Champions League', domain: 'Sports · Trending', meta: '200K posts' },
+];
+function exploreSidebar() {
+  const items = X_TRENDS.map((t) => ({ item: { itemContent: { itemType: 'TimelineTrend', name: t.name, trend_metadata: { domain_context: t.domain, meta_description: t.meta } } } }));
+  return { data: { explore_sidebar: { timeline: { instructions: [{ type: 'TimelineAddEntries', entries: [{ entryId: 'trends', content: { entryType: 'TimelineTimelineModule', items } }] }] } } } };
+}
+
 function timeline(tweets) {
   const entries = tweets.map((t) => ({ entryId: `tweet-${t.id}`, content: { entryType: 'TimelineTimelineItem', itemContent: { itemType: 'TimelineTweet', tweet_results: { result: gqlTweet(t) } } } }));
   return { data: { list: { tweets_timeline: { timeline: { instructions: [{ type: 'TimelineAddEntries', entries }] } } } } };
@@ -184,7 +195,8 @@ function profileHtml(handle) {
 
 function homeHtml() {
   // 像真实首页一样请求时间线，插件旁听到后把 AI / Web3 推文算进热点。
-  return page('<div data-testid="tweet">首页</div>', `fetch('/i/api/graphql/home/HomeTimeline?variables=' + encodeURIComponent('{"count":20}')).then(r => r.json());`);
+  return page('<div data-testid="tweet">首页</div>', `fetch('/i/api/graphql/home/HomeTimeline?variables=' + encodeURIComponent('{"count":20}')).then(r => r.json());
+    fetch('/i/api/graphql/side/ExploreSidebar').then(r => r.json());`);
 }
 
 // X 前端代码里登记 GraphQL 操作的写法（这里写成合法的 JS，页面加载时不会报错）。
@@ -216,6 +228,7 @@ async function apiRoute(r, url, p) {
   if (p.startsWith('/i/api/graphql/')) {
     const m = /^\/i\/api\/graphql\/([\w-]+)\/(\w+)$/.exec(p);
     if (m && m[1] === 'home' && m[2] === 'HomeTimeline') return json(r, 200, timeline(TWEETS.home));
+    if (m && m[1] === 'side' && m[2] === 'ExploreSidebar') return json(r, 200, exploreSidebar());
     if (m && m[1] === 'lst' && m[2] === 'ListLatestTweetsTimeline') {
       state.calls.list++;
       if (!url.searchParams.get('features')) return json(r, 400, { errors: [{ message: 'features cannot be null' }] });

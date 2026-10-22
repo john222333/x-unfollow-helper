@@ -7,16 +7,24 @@
   const TOPIC_LABELS = { ai: 'AI', web3: 'Web3' };
 
   const SOURCE_LABELS = {
+    xtrend: 'X 趋势',
     x: 'X 列表',
     home: 'X 首页',
     hn: 'Hacker News',
-    hf: 'Hugging Face',
+    reddit: 'Reddit',
+    hf: 'HF 论文',
+    hfm: 'HF 热门模型',
     gh: 'GitHub',
     cg: 'CoinGecko',
     rss: 'RSS',
   };
-  // 不同来源的信号强弱不一样：X 上的互动最直接，RSS 只有发布时间。
-  const SOURCE_WEIGHT = { x: 1, home: 0.9, hn: 0.9, hf: 0.8, gh: 0.7, cg: 0.75, rss: 0.6 };
+  // 不同来源的信号强弱不一样。X 趋势是全站的统计，最客观；你的列表和首页取决于你关注了谁，
+  // 偏个人口味，权重调低，单靠它们撑起来的话题还会再打折（见 cluster）。
+  const SOURCE_WEIGHT = { xtrend: 1, x: 0.85, home: 0.6, hn: 0.9, reddit: 0.8, hf: 0.75, hfm: 0.75, gh: 0.7, cg: 0.8, rss: 0.65 };
+  const PERSONAL = new Set(['x', 'home']);
+
+  // Reddit 上各领域的主要社区，按热度排序的公开数据。
+  const SUBREDDITS = { ai: ['LocalLLaMA', 'MachineLearning'], web3: ['CryptoCurrency'] };
 
   // 外部来源的地址。都是公开接口，不需要账号或 key。
   const ENDPOINTS = {
@@ -24,6 +32,8 @@
     hf: 'https://huggingface.co/api/daily_papers?limit=30',
     gh: (since) => `https://api.github.com/search/repositories?q=${encodeURIComponent(`topic:llm created:>${since}`)}&sort=stars&order=desc&per_page=20`,
     cg: 'https://api.coingecko.com/api/v3/search/trending',
+    hfm: 'https://huggingface.co/api/models?sort=trendingScore&direction=-1&limit=30',
+    reddit: (sub) => `https://www.reddit.com/r/${sub}/hot.json?limit=30&raw_json=1`,
   };
 
   const DEFAULT_RSS = {
@@ -34,7 +44,7 @@
   const DEFAULT_TRENDS = {
     enabled: true,
     lists: { ai: [], web3: [] }, // X 列表的 ID
-    sources: { home: true, hn: true, hf: true, gh: true, cg: true, rss: true },
+    sources: { xtrend: true, home: true, hn: true, reddit: true, hf: true, hfm: true, gh: true, cg: true, rss: true },
     rss: DEFAULT_RSS,
     autoRefreshMin: 30, // 打开侧边栏时，数据超过这么久就自动刷新
   };
@@ -62,7 +72,8 @@
   for (const t of TOPICS) {
     const en = KEYWORDS[t].filter((k) => /^[\x20-\x7e]+$/.test(k)).map((k) => k.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&'));
     const zh = KEYWORDS[t].filter((k) => !/^[\x20-\x7e]+$/.test(k));
-    KW_RE[t] = { en: new RegExp(`(?:^|[^a-z0-9])(?:${en.join('|')})(?![a-z0-9])`, 'gi'), zh };
+    // 后面可以紧跟版本号：GPT6、Llama4、Qwen3 也算。
+    KW_RE[t] = { en: new RegExp(`(?:^|[^a-z0-9])(?:${en.join('|')})(?![a-z])`, 'gi'), zh };
   }
 
   // 一段文字属于 AI 还是 Web3。都不沾边返回 null。$BTC 这种代币符号算 Web3。
@@ -173,8 +184,84 @@
         t: now || Date.now(),
         rank: Number.isFinite(Number(c.score)) ? Number(c.score) : i,
         symbol: sym, mcapRank: c.market_cap_rank || null,
+        keys: [`tk:${sym.toLowerCase()}`, sym.length >= 3 ? sym.toLowerCase() : null, String(c.name || '').toLowerCase().replace(/\s+/g, '')].filter((k) => k && k.length >= 3),
       };
     });
+  }
+
+  // Hugging Face 热门模型榜：按 trendingScore（最近的点赞和下载增长）排序。
+  function parseHFModels(json, now) {
+    const list = Array.isArray(json) ? json : [];
+    return list.filter((m) => m && (m.id || m.modelId)).map((m, i) => {
+      const id = m.id || m.modelId;
+      const base = String(id).split('/').pop();
+      return {
+        id: `hfm:${id}`, source: 'hfm', topic: 'ai',
+        title: `${id} 冲上 Hugging Face 热门模型榜${m.pipeline_tag ? `（${m.pipeline_tag}）` : ''}`,
+        url: `https://huggingface.co/${id}`,
+        t: now || Date.now(),
+        trending: Number(m.trendingScore) || Math.max(1, 30 - i), likes: Number(m.likes) || 0, downloads: Number(m.downloads) || 0,
+        keys: [modelKey(base)].filter(Boolean),
+      };
+    });
+  }
+
+  // 模型名里能代表「这个模型」的那个词：Qwen4-7B-Instruct → qwen4，Llama-4-Scout → llama4。
+  function modelKey(name) {
+    const parts = String(name || '').toLowerCase().split(/[-_ ]+/).filter(Boolean);
+    if (!parts.length) return null;
+    const key = /\d/.test(parts[0]) || parts.length === 1 ? parts[0] : `${parts[0]}${parts[1]}`;
+    const norm = key.replace(/[.]/g, '');
+    return norm.length >= 4 ? norm : null;
+  }
+
+  function parseReddit(json, sub, topic) {
+    const children = (json && json.data && Array.isArray(json.data.children)) ? json.data.children : [];
+    const out = [];
+    for (const c of children) {
+      const d = c && c.data;
+      if (!d || !d.id || !d.title || d.stickied || d.over_18) continue;
+      const tp = topic || classify(d.title);
+      if (!tp) continue;
+      const external = d.url && !/reddit\.com|redd\.it/.test(d.url) ? d.url : null;
+      out.push({
+        id: `reddit:${d.id}`, source: 'reddit', topic: tp, title: d.title,
+        url: `https://www.reddit.com${d.permalink || `/r/${sub}/comments/${d.id}`}`,
+        links: external ? [external] : [],
+        summary: clip(d.selftext || '', 300),
+        t: (Number(d.created_utc) || 0) * 1000,
+        points: Number(d.score) || 0, comments: Number(d.num_comments) || 0, feed: `r/${sub}`,
+      });
+    }
+    return out;
+  }
+
+  // X 自己的趋势榜（首页右侧「有什么新鲜事」和探索页）。这是 X 全站的统计，不受你关注了谁影响。
+  // 「1.2万 帖子」「12.3K posts」这样的帖子数换成数字。
+  function parsePostCount(s) {
+    const m = /([\d.,]+)\s*(万|亿|[KkMm])?/.exec(String(s || ''));
+    if (!m) return 0;
+    const n = Number(m[1].replace(/,/g, ''));
+    if (!Number.isFinite(n)) return 0;
+    const mul = { 万: 1e4, 亿: 1e8, K: 1e3, k: 1e3, M: 1e6, m: 1e6 }[m[2]] || 1;
+    return Math.round(n * mul);
+  }
+
+  function xTrendItem(tr, now) {
+    const name = String(tr.name || '').trim();
+    if (!name) return null;
+    const domain = String(tr.domain || '');
+    let topic = /crypto|加密|币/i.test(domain) ? 'web3' : classify(`${name} ${domain}`);
+    if (!topic && /^(technology|科技|science)/i.test(domain) && classify(name)) topic = classify(name);
+    if (!topic) return null;
+    const posts = parsePostCount(tr.meta);
+    return {
+      id: `xt:${name.toLowerCase()}`, source: 'xtrend', topic,
+      title: posts ? `${name}（X 趋势，${tr.meta}）` : `${name}（X 趋势）`,
+      url: `https://x.com/search?q=${encodeURIComponent(name)}`,
+      t: tr.seenAt || now || Date.now(),
+      posts, rank: Number(tr.rank) || 0, name,
+    };
   }
 
   // 不依赖 DOMParser 的 RSS / Atom 解析（service worker 里没有 DOMParser）。
@@ -235,10 +322,14 @@
     switch (item.source) {
       case 'x':
       case 'home': {
-        const eng = item.likes + 2 * item.retweets + 2 * item.quotes + item.replies + (item.views || 0) / 200;
-        return eng / (h + 1) ** 0.8;
+        // 粉丝多的大号天然互动多：按粉丝数打个折，让「小号写出的爆款」也能排上来。
+        const fans = 1 + (item.followers || 0) / 50000;
+        return engagement(item) / (h + 1) ** 0.8 / fans ** 0.35;
       }
-      case 'hn': return (item.points + item.comments * 0.5) / (h + 2) ** 1.2;
+      case 'xtrend': return item.posts || Math.max(1, 30 - (item.rank || 0));
+      case 'hn':
+      case 'reddit': return (item.points + item.comments * 0.5) / (h + 2) ** 1.2;
+      case 'hfm': return item.trending;
       case 'hf': return (item.upvotes + item.comments) / (h + 2) ** 0.6;
       case 'gh': return item.stars / (h / 24 + 1);
       case 'cg': return 20 - Math.min(19, item.rank || 0);
@@ -246,8 +337,10 @@
     }
   }
 
-  // 多久以内的内容算「热点」。GitHub 新项目涨星慢，放宽到一周。
-  const MAX_AGE_H = { gh: 24 * 7, cg: 48 };
+  const engagement = (it) => (it.likes || 0) + 2 * (it.retweets || 0) + 2 * (it.quotes || 0) + (it.replies || 0) + (it.views || 0) / 200;
+
+  // 多久以内的内容算「热点」。GitHub 新项目涨星慢，放宽到一周；X 趋势是看到时的榜单，只认最近 6 小时。
+  const MAX_AGE_H = { gh: 24 * 7, cg: 48, xtrend: 6 };
   const maxAge = (src) => MAX_AGE_H[src] || 48;
 
   // 给每条内容打 0–1 的分：同一来源内按增速排名，再乘来源权重和新鲜度。
@@ -260,7 +353,7 @@
       const v = list.map((it) => ({ it, v: velocity(it, t0) })).sort((a, b) => a.v - b.v);
       v.forEach(({ it }, i) => {
         const pct = v.length > 1 ? i / (v.length - 1) : 0.6;
-        const age = it.source === 'gh' ? 0 : hours(it, t0);
+        const age = ['gh', 'hfm', 'cg', 'xtrend'].includes(it.source) ? 0 : hours(it, t0);
         const recency = 0.5 ** (age / 36);
         it.score = (SOURCE_WEIGHT[it.source] || 0.5) * (0.3 + 0.7 * pct) * (0.4 + 0.6 * recency);
       });
@@ -280,7 +373,8 @@
     const out = new Set();
     const text = `${item.title || ''} ${item.summary || ''} ${item.text || ''}`.toLowerCase();
     for (const w of text.match(/[a-z][a-z0-9.+-]{2,}/g) || []) {
-      const x = w.replace(/[.+-]+$/, '');
+      // GPT-6、gpt6、#GPT6 当成同一个词。
+      const x = w.replace(/[.+-]+$/, '').replace(/[.-]/g, '');
       if (x.length > 2 && !STOP.has(x) && !GENERIC.has(x)) out.add(x);
     }
     for (const t of text.match(/\$[a-z]{2,8}\b/g) || []) out.add(`tk:${t.slice(1)}`);
@@ -291,6 +385,15 @@
       }
     }
     return out;
+  }
+
+  function sigKeys(item) {
+    if (item.source === 'xtrend') {
+      const t = [...tokens({ title: item.name })];
+      // 单个很短的英文词（比如「AI」已被排除，「Sam」这种）太容易误配，至少 4 个字母或者是代币符号。
+      return t.length && !(t.length === 1 && t[0].length < 4 && !t[0].startsWith('tk:')) ? [t] : null;
+    }
+    return item.keys && item.keys.length ? item.keys.slice() : null;
   }
 
   function linkKeys(item) {
@@ -306,8 +409,15 @@
     return keys;
   }
 
+  // 短条目（X 趋势词、热门币、热门模型）只有几个字，按「关键词出现在对方内容里」来认。
+  function keyHit(a, b) {
+    if (!a.keys || !a.keys.length) return false;
+    return a.keys.some((k) => (Array.isArray(k) ? k.length && k.every((t) => b.tokens.has(t)) : b.tokens.has(k)));
+  }
+
   function similar(a, b) {
     for (const k of a.links) if (b.links.has(k)) return true;
+    if (keyHit(a, b) || keyHit(b, a)) return true;
     let shared = 0;
     for (const t of a.tokens) if (b.tokens.has(t)) shared++;
     const small = Math.min(a.tokens.size, b.tokens.size) || 1;
@@ -319,34 +429,57 @@
     const sorted = items.slice().sort((a, b) => (b.score || 0) - (a.score || 0));
     const groups = [];
     for (const it of sorted) {
-      const sig = { tokens: tokens(it), links: linkKeys(it) };
+      const sig = { tokens: tokens(it), links: linkKeys(it), keys: sigKeys(it) };
       const g = groups.find((x) => x.topic === it.topic && similar(x.sig, sig));
       if (g) {
         g.items.push(it);
+        if (sig.keys) g.sig.keys = (g.sig.keys || []).concat(sig.keys);
         for (const t of sig.tokens) g.sig.tokens.add(t);
         for (const l of sig.links) g.sig.links.add(l);
       } else {
         groups.push({ topic: it.topic, items: [it], sig });
       }
     }
-    return groups.map((g) => {
-      const top = g.items[0];
-      const sources = [...new Set(g.items.map((x) => x.source))];
-      // 有新闻标题时用标题当话题名，比推文原文更像「一件事」。
-      const headline = g.items.find((x) => x.source !== 'x' && x.source !== 'home') || top;
-      const heat = Math.min(1, (top.score || 0) + 0.06 * (g.items.length - 1) + 0.1 * (sources.length - 1));
-      return {
-        id: `tp:${top.id}`,
-        topic: g.topic,
-        title: headline.title,
-        url: headline.url,
-        heat: Math.round(heat * 100),
-        sources,
-        t: Math.max(...g.items.map((x) => x.t || 0)),
-        items: g.items.slice(0, 8),
-        count: g.items.length,
-      };
-    }).sort((a, b) => b.heat - a.heat || b.t - a.t);
+    return groups.map((g) => summarize(g)).sort((a, b) => b.heat - a.heat || b.t - a.t);
+  }
+
+  // 话题热度：最热那条的分数，加上「有多少互相独立的来源在讲」。
+  // 同一个博主发十条只算一个声音；只有一个声音、或者只出现在你自己的关注圈里的话题会打折。
+  function summarize(g) {
+    const top = g.items[0];
+    const sources = [...new Set(g.items.map((x) => x.source))];
+    const authors = new Set(g.items.filter((x) => x.author).map((x) => x.author.toLowerCase()));
+    const outlets = new Set(g.items.filter((x) => !x.author && x.source !== 'xtrend').map((x) => x.feed || x.source));
+    const voices = authors.size + outlets.size;
+    const personalOnly = sources.every((s) => PERSONAL.has(s));
+    let heat = (top.score || 0) + Math.min(0.3, 0.07 * (voices - 1)) + Math.min(0.2, 0.08 * (sources.length - 1));
+    if (voices <= 1) heat *= 0.75;
+    if (personalOnly) heat *= 0.85;
+    const tweets = g.items.filter((x) => x.source === 'x' || x.source === 'home');
+    const xt = g.items.find((x) => x.source === 'xtrend');
+    // 有新闻、社区帖子的标题时用它当话题名，比推文原文、趋势词更像「一件事」。
+    const headline = g.items.find((x) => !PERSONAL.has(x.source) && !['xtrend', 'cg', 'hfm'].includes(x.source))
+      || g.items.find((x) => !PERSONAL.has(x.source)) || top;
+    return {
+      id: `tp:${top.id}`,
+      topic: g.topic,
+      title: headline.title,
+      url: headline.url,
+      // 换算成 0–100，越往上越难涨，几个大话题不会都挤在 100。
+      heat: Math.round(100 * (1 - Math.exp(-1.6 * heat))),
+      sources,
+      t: Math.max(...g.items.map((x) => x.t || 0)),
+      items: g.items.slice(0, 8),
+      count: g.items.length,
+      // 「为什么上榜」：给侧边栏显示依据用。
+      why: {
+        authors: authors.size,
+        outlets: outlets.size,
+        engagement: Math.round(tweets.reduce((n, x) => n + engagement(x), 0)),
+        xPosts: xt ? xt.posts : 0,
+        personalOnly,
+      },
+    };
   }
 
   function buildTopics(items, now, limit) {
@@ -399,7 +532,8 @@
     const t = normalizeTrends(trends);
     const out = new Set();
     if (t.sources.hn) out.add('https://hn.algolia.com/*');
-    if (t.sources.hf) out.add('https://huggingface.co/*');
+    if (t.sources.hf || t.sources.hfm) out.add('https://huggingface.co/*');
+    if (t.sources.reddit) out.add('https://www.reddit.com/*');
     if (t.sources.gh) out.add('https://api.github.com/*');
     if (t.sources.cg) out.add('https://api.coingecko.com/*');
     if (t.sources.rss) {
@@ -411,8 +545,9 @@
   }
 
   root.XATrends = {
-    TOPICS, TOPIC_LABELS, SOURCE_LABELS, SOURCE_WEIGHT, ENDPOINTS, DEFAULT_TRENDS, DEFAULT_RSS, KEYWORDS,
+    TOPICS, TOPIC_LABELS, SOURCE_LABELS, SOURCE_WEIGHT, PERSONAL, SUBREDDITS, ENDPOINTS, DEFAULT_TRENDS, DEFAULT_RSS, KEYWORDS,
     classify, parseListRef, stripHtml, decodeEntities, parseHN, parseHF, parseGitHub, parseCoinGecko, parseRSS, tweetItem,
+    parseHFModels, modelKey, parseReddit, parsePostCount, xTrendItem, engagement,
     velocity, scoreItems, tokens, cluster, buildTopics, weightedLength, composeUrl, normalizeTrends, originsFor, clip,
   };
 })(typeof globalThis !== 'undefined' ? globalThis : self);
