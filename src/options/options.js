@@ -527,9 +527,130 @@
     $('execMode').value = s.execMode;
     $('keepAwake').checked = !!s.keepAwake;
     for (const k of Object.keys(S.LIMITS)) $(k).title = `范围 ${S.LIMITS[k][0]}–${S.LIMITS[k][1]}`;
+    fillTrends();
   }
 
+  // ---------- 热点与模型设置 ----------
+  const XT = window.XATrends;
+  const XL = window.XALLM;
+  let hasKey = false;
+  const lines = (id) => $(id).value.split(/[\n,，\s]+/).map((x) => x.trim()).filter(Boolean);
+  const SRC_IDS = { home: 'srcHome', hn: 'srcHn', hf: 'srcHf', gh: 'srcGh', cg: 'srcCg', rss: 'srcRss' };
+
+  $('llmProvider').innerHTML = Object.entries(XL.PROVIDERS).map(([k, v]) => `<option value="${k}">${esc(v.label)}</option>`).join('');
+
+  function fillTrends() {
+    const t = data.settings.trends;
+    const l = data.settings.llm;
+    $('trendsEnabled').checked = t.enabled;
+    $('listsAi').value = t.lists.ai.map((id) => `https://x.com/i/lists/${id}`).join('\n');
+    $('listsWeb3').value = t.lists.web3.map((id) => `https://x.com/i/lists/${id}`).join('\n');
+    for (const [k, id] of Object.entries(SRC_IDS)) $(id).checked = !!t.sources[k];
+    $('rssAi').value = t.rss.ai.join('\n');
+    $('rssWeb3').value = t.rss.web3.join('\n');
+    $('autoRefreshMin').value = t.autoRefreshMin;
+    $('llmProvider').value = l.provider;
+    $('llmModel').value = l.model;
+    $('llmBase').value = l.baseUrl;
+    $('llmLang').value = l.lang;
+    $('llmPersona').value = l.persona;
+    $('llmKey').value = '';
+    updateLLMHints();
+  }
+
+  function updateLLMHints() {
+    const p = XL.PROVIDERS[$('llmProvider').value] || XL.PROVIDERS.anthropic;
+    $('llmModel').placeholder = p.model || '例如 qwen-plus、moonshot-v1-8k';
+    $('llmModelHint').textContent = p.model ? `留空就用 ${p.model}` : '必填';
+    $('llmBaseRow').hidden = $('llmProvider').value !== 'custom';
+    $('llmKey').placeholder = hasKey ? '已保存（不显示）。要换就直接填新的' : (p.keyHint || '');
+    $('llmKeyHint').textContent = hasKey ? '已保存' : '未填写';
+  }
+  $('llmProvider').addEventListener('change', updateLLMHints);
+
+  function trendsFromForm() {
+    const sources = {};
+    for (const [k, id] of Object.entries(SRC_IDS)) sources[k] = $(id).checked;
+    return {
+      trends: XT.normalizeTrends({
+        enabled: $('trendsEnabled').checked,
+        lists: { ai: lines('listsAi'), web3: lines('listsWeb3') },
+        sources,
+        rss: { ai: lines('rssAi'), web3: lines('rssWeb3') },
+        autoRefreshMin: Number($('autoRefreshMin').value),
+      }),
+      llm: XL.normalizeLLM({
+        provider: $('llmProvider').value,
+        model: $('llmModel').value,
+        baseUrl: $('llmBase').value,
+        lang: $('llmLang').value,
+        persona: $('llmPersona').value,
+      }),
+    };
+  }
+
+  // 热点和模型要访问的网站：在点击的同一时刻申请权限（浏览器要求），已经授权过的不会再问。
+  function requestOrigins(t) {
+    const origins = t.trends.enabled ? XT.originsFor(t.trends) : [];
+    if (hasKey || $('llmKey').value.trim()) {
+      const o = XL.originOf(t.llm);
+      if (o) origins.push(o);
+    }
+    if (!origins.length) return Promise.resolve(true);
+    return chrome.permissions.request({ origins }).catch(() => false);
+  }
+
+  async function saveTrendParts(t) {
+    const key = $('llmKey').value.trim();
+    if (key) {
+      await chrome.storage.local.set({ llmKey: key });
+      hasKey = true;
+    }
+  }
+
+  async function loadKeyFlag() {
+    const { llmKey } = await chrome.storage.local.get('llmKey');
+    hasKey = !!(llmKey && String(llmKey).trim());
+    updateLLMHints();
+  }
+
+  $('llmTest').onclick = () => act($('llmTest'), async () => {
+    const t = trendsFromForm();
+    const ok = await requestOrigins(t);
+    if (!ok) throw new Error('没有授权访问模型服务商的网站，无法测试。');
+    await saveTrendParts(t);
+    data.settings = S.mergeSettings({ ...data.settings, ...t });
+    await chrome.storage.local.set({ settings: data.settings });
+    flash($('llmMsg'), '正在测试…');
+    try {
+      const r = await send({ type: 'xa:llmTest' });
+      flash($('llmMsg'), `连接正常（${r.model}）。`, 8000);
+    } catch (e) {
+      flash($('llmMsg'), `连接失败：${e.message}`);
+    }
+    fillTrends();
+  });
+
+  $('llmClear').onclick = async () => {
+    if (!confirm('删除保存的模型 API key？删除后就不能生成推文草稿了。')) return;
+    await chrome.storage.local.remove('llmKey');
+    hasKey = false;
+    $('llmKey').value = '';
+    updateLLMHints();
+    flash($('llmMsg'), '已删除。', 3000);
+  };
+
+  // 打开侧边栏必须在点击的同一时刻调用，所以提前拿到当前窗口。
+  let winId = null;
+  chrome.windows.getCurrent().then((w) => { winId = w.id; }).catch(() => {});
+  $('openPanel').onclick = () => {
+    chrome.sidePanel.open({ windowId: winId }).catch((e) => alert(`打不开侧边栏：${e.message}`));
+  };
+
   $('saveBtn').onclick = () => act($('saveBtn'), async () => {
+    const t = trendsFromForm();
+    const granted = await requestOrigins(t);
+    await saveTrendParts(t);
     const pace = {};
     for (const k of Object.keys(S.LIMITS)) pace[k] = Number($(k).value);
     const next = S.mergeSettings({
@@ -541,16 +662,19 @@
       dryRun: $('dryRun').checked,
       execMode: $('execMode').value,
       keepAwake: $('keepAwake').checked,
+      ...t,
     });
     await chrome.storage.local.set({ settings: next });
     data.settings = next;
     fillSettings();
     const adjusted = Object.keys(S.LIMITS).some((k) => next.pace[k] !== pace[k]);
-    flash($('saveMsg'), adjusted ? '已保存。部分节奏超出安全范围，已自动调整。' : '已保存。', 4000);
+    const notes = [adjusted ? '部分节奏超出安全范围，已自动调整。' : '', granted ? '' : '有些热点来源或模型网站没有授权，它们不会被读取。'].filter(Boolean).join('');
+    flash($('saveMsg'), `已保存。${notes}`, notes ? 8000 : 4000);
   });
 
   $('exportAll').onclick = async () => {
     const all = await chrome.storage.local.get(null);
+    delete all.llmKey; // 模型的 API key 不导出
     download(`x-assistant-data-${S.dayKey()}.json`, JSON.stringify(all, null, 2), 'application/json');
   };
   $('clearUsers').onclick = async () => {
@@ -568,6 +692,7 @@
     renderJob();
     renderLog();
     fillSettings();
+    loadKeyFlag();
     refreshAccount();
     window.addEventListener('focus', () => refreshAccount());
     const tab = location.hash.replace('#', '');

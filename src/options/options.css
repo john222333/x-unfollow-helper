@@ -83,3 +83,8 @@ table.grid { width: 100%; border-collapse: collapse; }
 #failedBanner { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
 #failedBanner[hidden] { display: none; }
 .btn.small { padding: 3px 10px; font-size: 12px; }
+.form label > span:has(textarea) { grid-column: 2 / 4; }
+.form label > span textarea { margin: 0; }
+.form > p { margin: -4px 0 0; }
+.checks { display: flex; flex-wrap: wrap; gap: 6px 18px; }
+.form label[hidden] { display: none; }

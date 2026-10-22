@@ -92,6 +92,11 @@
       if (gqlUsers.length > 5000) gqlUsers.splice(0, gqlUsers.length - 5000);
     }
     if (ev.data.op === 'meta' && alive()) send({ type: 'xa:xmeta', meta: ev.data.meta }).catch(() => {});
+    // 你在网页上刷到的首页、列表推文交给后台算热点（后台会只留下 AI / Web3 相关的）。
+    if (/^(HomeTimeline|HomeLatestTimeline|ListLatestTweetsTimeline)$/.test(ev.data.op) && alive()) {
+      const tweets = XAPI.parseTweets(ev.data.data);
+      if (tweets.length) send({ type: 'xa:tweets', op: ev.data.op, listId: ev.data.listId || null, tweets }).catch(() => {});
+    }
   });
   // 本脚本加载前页面可能已经收到了第一页，让页面脚本把缓存的数据再发一遍。
   window.postMessage({ source: 'xa-content', op: 'replay' }, window.location.origin);

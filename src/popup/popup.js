@@ -4,6 +4,16 @@
   const $ = (id) => document.getElementById(id);
   const STATUS = { idle: '空闲', running: '进行中', awaiting_confirm: '待确认', paused: '已暂停', tripped: '已熔断', daily_cap: '今日已满' };
 
+  // 打开侧边栏必须在点击的同一时刻调用，所以提前拿到当前窗口。
+  let winId = null;
+  chrome.windows.getCurrent().then((w) => { winId = w.id; }).catch(() => {});
+  function openPanel() {
+    chrome.sidePanel.open({ windowId: winId }).then(() => window.close(), (e) => {
+      $('err').hidden = false;
+      $('err').textContent = `打不开侧边栏：${e.message}`;
+    });
+  }
+
   function open(hash) {
     chrome.tabs.create({ url: chrome.runtime.getURL(`src/options/options.html#${hash}`) });
     window.close();
@@ -33,12 +43,14 @@
     if (st.job.status === 'awaiting_confirm') btns.push('<button data-go="job">去确认下一批</button>');
     if (['paused', 'idle'].includes(st.job.status) && st.queueLength) btns.push(`<button data-do="start">${st.job.status === 'paused' ? '继续取关' : '开始取关'}</button>`);
     btns.push('<button data-go="log">日志</button>');
+    btns.push('<button data-panel="1" title="在侧边栏看 AI / Web3 热点，生成推文草稿">热点与推文</button>');
     $('actions').innerHTML = btns.join('');
   }
 
   $('actions').addEventListener('click', async (e) => {
     const b = e.target.closest('button');
     if (!b) return;
+    if (b.dataset.panel) return openPanel();
     if (b.dataset.go) return open(b.dataset.go);
     try {
       await send({ type: `xa:${b.dataset.do}` });

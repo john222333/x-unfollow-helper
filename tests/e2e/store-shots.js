@@ -10,6 +10,7 @@ const fs = require('fs');
 const os = require('os');
 const { chromium } = require('playwright');
 const mock = require('./mock-x');
+const mockSources = require('./mock-sources');
 
 const EXT = path.resolve(__dirname, '../..');
 const OUT = path.resolve(EXT, 'docs/store');
@@ -120,6 +121,37 @@ async function until(fn, ms, label) {
   await opts.click('#tabs button[data-tab="settings"]');
   await sleep(800);
   await opts.screenshot({ path: path.join(OUT, 'screenshot-4-settings.png') });
+  fs.mkdirSync(path.join(__dirname, 'out'), { recursive: true });
+  await opts.screenshot({ path: path.join(__dirname, 'out', 'settings-full.png'), fullPage: true });
+
+  // 5. 热点侧边栏：左边说明，右边是侧边栏（同一个插件的页面可以嵌进来）
+  await mockSources.install(context);
+  // 截图里不要出现「来源读取失败」：测试里故意出错的源这里换成正常的。
+  await context.route('https://decrypt.co/**', (r) => r.fulfill({ status: 200, contentType: 'application/rss+xml', headers: { 'access-control-allow-origin': '*' }, body: '<rss><channel></channel></rss>' }));
+  await sw.evaluate(() => { chrome.permissions.contains = async () => true; });
+  await opts.evaluate((ids) => chrome.storage.local.get('settings').then(({ settings }) => chrome.storage.local.set({
+    settings: { ...settings, trends: { ...settings.trends, lists: { ai: [ids.ai], web3: [ids.web3] } } },
+    llmKey: 'sk-demo',
+  })), mock.LIST_IDS);
+  const xHome = await context.newPage();
+  await xHome.goto('https://x.com/home');
+  await sleep(1500);
+  await send({ type: 'xa:trendsRefresh' });
+  const st = await send({ type: 'xa:trends' });
+  await send({ type: 'xa:draft', topicId: st.state.topics.ai[0].id, mode: 'post' });
+  await xHome.close();
+  await opts.evaluate((url) => {
+    document.body.innerHTML = `<div style="display:flex;height:800px;background:#0f1419;color:#fff;font-family:-apple-system,'PingFang SC','Noto Sans CJK SC',sans-serif">
+      <div style="flex:1;padding:120px 64px 0">
+        <div style="font-size:40px;font-weight:700;line-height:1.25">AI / Web3 热点<br>一键写推文草稿</div>
+        <ul style="font-size:20px;line-height:1.9;color:#cfd9de;margin-top:32px;padding-left:22px">
+          <li>汇总你的 X 列表、首页推文和新闻源</li><li>同一件事自动合并，按热度排序</li>
+          <li>用你自己的模型 key，三种风格可改可发</li><li>只填进发推框，从不自动发推</li></ul></div>
+      <iframe src="${url}" style="width:420px;height:800px;border:0;background:#f7f9f9"></iframe></div>`;
+    document.body.style.margin = '0';
+  }, `chrome-extension://${extId}/src/panel/panel.html`);
+  await sleep(2500);
+  await opts.screenshot({ path: path.join(OUT, 'screenshot-5-trends.png') });
 
   // 宣传图 440×280
   const icon = fs.readFileSync(path.join(EXT, 'icons/icon128.png')).toString('base64');
@@ -130,7 +162,7 @@ async function until(fn, ms, label) {
     <img src="data:image/png;base64,${icon}" width="96" height="96" style="border-radius:22px">
     <div><div style="font-size:30px;font-weight:700;line-height:1.2">X 取关助手</div>
     <div style="font-size:15px;color:#8b98a5;margin-top:4px">Unfollow Helper for X</div>
-    <div style="font-size:16px;margin-top:16px;line-height:1.5">筛选不回关、机器人<br>后台分批慢速取关</div></div></body></html>`);
+    <div style="font-size:16px;margin-top:16px;line-height:1.5">后台分批慢速取关<br>AI / Web3 热点写推文</div></div></body></html>`);
   await tile.screenshot({ path: path.join(OUT, 'promo-small-440x280.png') });
 
   await send({ type: 'xa:clearQueue' });

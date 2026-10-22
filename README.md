@@ -2,6 +2,8 @@
 
 一个 Chrome 插件（Manifest V3），帮你在已经登录的 x.com 上整理关注列表：读取你关注的人，按「不回关」「默认头像」「零推文」「疑似机器人」等标签筛选，然后在后台按慢速、分批的节奏取关。不弹窗口，批次之间不用再确认，遇到 X 的限制提示自动停下。
 
+另外附带一个**热点侧边栏**：汇总正在升温的 AI 和 Web3 话题，用你自己的模型 API key 一键生成推文草稿，填进 X 的发推框后由你自己决定发不发。
+
 [English](#english) · [隐私政策](PRIVACY.md) · [更新记录](CHANGELOG.md) · [参与开发](CONTRIBUTING.md)
 
 > 本插件不是 X 官方产品，与 X Corp. 没有任何关系。批量取关属于 X 规则限制的自动化行为，即使按默认节奏也可能被限制或锁号，请自行判断并承担风险。
@@ -15,6 +17,8 @@
 - **自动保护**：X 提示操作频繁、登录失效、账号被锁、出现人机验证时立刻停下，24 小时内不再继续。
 - **可撤销**：日志里勾选取关过的人，一键重新关注。
 - **重新读取会同步**：已经不再关注的人会从列表里移除；日志显示取关成功、X 上却还在关注的人会标成「取关未生效」，可以一键重新取关。
+- **AI / Web3 热点（侧边栏）**：来源包括你登记的 X 列表（按点赞、转发、浏览的增速算热度）、你在 x.com 首页刷到的相关推文、Hacker News、Hugging Face 每日论文、GitHub 新项目、CoinGecko 热搜和 RSS 新闻源。讲同一件事的推文和新闻会合并成一个话题，按热度排序。
+- **推文草稿**：每个话题一键生成观点、科普、轻松三种风格的草稿，也可以针对某条热门推文写引用。支持 Claude、OpenAI、DeepSeek 和兼容 OpenAI 接口的其他模型，key 只存在本地。插件不会替你发推。
 
 ## 安装
 
@@ -39,6 +43,13 @@
 4. 用标签和关键词筛选，勾选要取关的人 → **加入队列并开始取关**。任务在后台自动执行，不用再点「开始」。
 5. **取关任务** 页显示进度、预计完成时间和当前的执行方式。建议第一次先用一小批（比如 5 个）试，再按默认节奏慢慢来。
 6. 过一段时间再点一次 **读取关注列表**，列表会和 X 上同步。
+
+### 热点与推文建议
+
+1. **设置** → **推文草稿用的模型**：选服务商，填 API key，点 **保存并测试连接**。浏览器会问一次是否允许访问这个服务商的网站。
+2. （建议）在 X 上建两个列表，分别放你认可的 AI 博主和 Web3 博主，把列表链接贴到 **热点与推文建议** 里，点 **保存设置**（浏览器会问一次是否允许访问勾选的新闻源）。
+3. 点工具栏的插件图标 → **热点与推文**，或者设置页的 **打开热点侧边栏**。侧边栏打开时数据超过 30 分钟会自动刷新；读取 X 列表需要你开着一个已登录的 x.com 页面。
+4. 在话题卡片上点 **写推文**，或在某条推文旁点 **引用**。改好后点 **去发推**，插件在新标签页打开 X 的发推框并填好内容，发不发由你决定。
 
 ## 后台运行是怎么做到的
 
@@ -70,7 +81,7 @@
 
 ## 隐私
 
-所有数据只保存在你自己的浏览器里。插件只连接 X 自己的服务器（x.com、存放网页代码的 abs.twimg.com、显示头像用的 pbs.twimg.com），不收集任何统计数据，没有自己的服务器。详见 [隐私政策](PRIVACY.md)。
+所有数据只保存在你自己的浏览器里。取关功能只连接 X 自己的服务器（x.com、存放网页代码的 abs.twimg.com、显示头像用的 pbs.twimg.com）。热点功能会读取你勾选的公开新闻源，生成草稿时把话题资料直接发给你自己选的模型服务商；这些网站都要你在设置里授权后才会访问。插件不收集任何统计数据，没有自己的服务器。详见 [隐私政策](PRIVACY.md)。
 
 ## 已知限制
 
@@ -79,6 +90,8 @@
 - X 改版后按钮的 `data-testid` 可能变化，点按钮的方式会失败（会熔断而不是乱点）；选择器集中在 `src/content/x-dom.js`。
 - 还不能按「多久没发推」筛选：关注列表的数据里没有最后发推时间。
 - X 的关注列表偶尔有延迟，刚取关的人可能还会出现一阵子，这时会标成「取关未生效」，重新取关一次即可确认。
+- 热度是估算：X 上的部分来自你登记的列表和你刷到的首页，覆盖不到整个 X；外部来源的接口变了时对应来源会在侧边栏里提示读取失败，其他来源照常。
+- 草稿质量取决于你选的模型。模型可能写错细节，发之前请自己核对。
 
 ## 开发
 
@@ -90,6 +103,10 @@ _locales/                插件名称和简介（中文、英文）
 src/background.js        后台：执行环境、取关调度、限速熔断、关注列表读取与合并
 src/lib/xapi.js          X 网页版接口：请求构造和结果判断
 src/lib/store.js         默认设置、节奏上下限、标签
+src/lib/trends.js        热点：各来源解析、热度打分、话题归并
+src/lib/llm.js           推文草稿：模型请求、返回值解析、提示词
+src/trends-bg.js         后台：刷新热点、旁听到的推文、生成草稿
+src/panel/               热点侧边栏
 src/lib/msg.js           页面与后台之间的消息
 src/content/page-hook.js 页面环境：记下网页版的接口参数，旁听关注列表数据（兜底读取用）
 src/content/x-dom.js     x.com 的选择器、读取和点击（备用方式，X 改版时改这里）
@@ -128,7 +145,8 @@ npm run zip          # 打包上架用的 zip（只包含插件运行需要的�
 - **Account check.** Nothing happens if the logged-in account isn't the owner of the list.
 - **Undo.** Re-follow anyone from the log.
 - **Re-reading syncs the list.** Accounts you no longer follow are removed. Accounts the log says were unfollowed but X still lists are tagged so you can retry them.
-- **Private.** Everything stays in your browser. The extension only talks to X's own servers (x.com, abs.twimg.com, and pbs.twimg.com for avatars), has no server of its own, and collects no analytics. See [PRIVACY.md](PRIVACY.md).
+- **AI / Web3 trends side panel.** Collects rising topics from X lists you register, AI/Web3 posts you scroll past on your home timeline, Hacker News, Hugging Face daily papers, new GitHub projects, CoinGecko trending and RSS feeds, merges posts and articles about the same story, and drafts posts with your own model API key (Claude, OpenAI, DeepSeek or any OpenAI-compatible endpoint). Drafts open in X's compose box; the extension never posts for you.
+- **Private.** Everything stays in your browser. Unfollowing only talks to X's own servers (x.com, abs.twimg.com, and pbs.twimg.com for avatars). The trends panel reads the public sources you enable and sends topic material to the model provider you choose, only after you grant access. No server of its own, no analytics. See [PRIVACY.md](PRIVACY.md).
 
 The UI is currently Chinese only. Install from source: open `chrome://extensions`, turn on Developer mode, click **Load unpacked**, and select the folder containing `manifest.json`.
 

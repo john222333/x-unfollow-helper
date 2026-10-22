@@ -10,6 +10,7 @@ const fs = require('fs');
 const os = require('os');
 const { chromium } = require('playwright');
 const mock = require('./mock-x');
+const mockSources = require('./mock-sources');
 
 const EXT = path.resolve(__dirname, '../..');
 const OUT = path.resolve(__dirname, 'out');
@@ -66,7 +67,7 @@ const errors = [];
   if (!defaults.autoStart || defaults.confirmEachBatch) throw new Error('默认应该自动开始、不用每批确认');
   if (defaults.execMode !== 'auto') throw new Error('默认执行方式应该是后台接口');
 
-  if (defaults.llm || defaults.ui) throw new Error('推文体检的设置应该已经去掉');
+  if (defaults.ui || (defaults.llm && defaults.llm.apiKey)) throw new Error('推文体检的设置应该已经去掉，模型 key 不能放在设置里');
 
   // 设置：最快允许的节奏
   await opts.evaluate(() => chrome.storage.local.get('settings').then(({ settings }) => chrome.storage.local.set({ settings: {
@@ -331,7 +332,86 @@ const errors = [];
   });
   if (!(eta.days >= 1)) throw new Error('150 人应该要跨天');
 
-  // 11. 弹窗
+  // 11. 热点与推文建议
+  console.log('▶ 热点与推文建议');
+  const llmCalls = await mockSources.install(context);
+  // 测试里没法点浏览器的授权对话框，直接当作已经授权。
+  await sw.evaluate(() => { chrome.permissions.contains = async () => true; });
+
+  const tdefaults = await get('settings');
+  if (!tdefaults.trends || !tdefaults.trends.enabled || tdefaults.llm.provider !== 'anthropic') throw new Error('热点设置的默认值不对');
+  await opts.evaluate((ids) => chrome.storage.local.get('settings').then(({ settings }) => chrome.storage.local.set({
+    settings: { ...settings, trends: { ...settings.trends, lists: { ai: [`https://x.com/i/lists/${ids.ai}`], web3: [ids.web3] } } },
+    llmKey: 'sk-ant-test',
+  })), mock.LIST_IDS);
+  const sTrends = (await get('settings')).trends;
+  console.log('  列表', JSON.stringify(sTrends.lists));
+
+  // 先测试连接
+  const test1 = await send({ type: 'xa:llmTest' });
+  if (!test1 || !test1.ok || test1.model !== 'claude-haiku-5-5') throw new Error(`测试连接失败 ${JSON.stringify(test1)}`);
+
+  // 打开一个 x.com 首页：插件借用它读取列表，同时旁听到首页时间线。
+  const xHome = await context.newPage();
+  await xHome.goto('https://x.com/home');
+  await until(async () => Object.keys((await get('trendTweets')) || {}).length >= 1, 15000, '旁听首页推文');
+  const homeTweets = await get('trendTweets');
+  if (!homeTweets['9001'] || homeTweets['9002']) throw new Error('首页推文应该只保留 AI / Web3 相关的');
+  const refreshed = await send({ type: 'xa:trendsRefresh' });
+  const tstate = refreshed.state;
+  console.log('  来源', JSON.stringify(tstate.counts), '出错', JSON.stringify(tstate.errors));
+  if (tstate.errors.x || tstate.errors.hn || tstate.errors.cg) throw new Error('列表或外部来源不应该出错');
+  if (!tstate.errors['rss:decrypt.co']) throw new Error('出错的 RSS 应该单独记下来');
+  const aiTop = tstate.topics.ai[0];
+  console.log('  AI 第一', aiTop.heat, aiTop.title, aiTop.sources.join(','), aiTop.count);
+  if (!/GPT-6/.test(aiTop.title) || aiTop.count < 3 || !aiTop.sources.includes('hn') || !aiTop.sources.includes('x')) throw new Error('同一件事的推文和新闻应该归成一个话题');
+  if (tstate.topics.ai.some((t) => /Rust/.test(t.title))) throw new Error('和 AI 无关的 HN 内容不应该出现');
+  if (!tstate.topics.ai.some((t) => t.items.some((i) => i.id === 'x:9001'))) throw new Error('首页刷到的 AI 推文应该算进来');
+  const w3 = tstate.topics.web3.find((t) => /ETF/.test(t.title));
+  if (!w3 || !w3.sources.includes('rss') || !w3.sources.includes('x')) throw new Error('Web3 的 ETF 话题应该合并推文和 RSS');
+  if (mock.state.calls.list !== 2) throw new Error(`应该读取 2 个列表，实际 ${mock.state.calls.list}`);
+
+  // 侧边栏
+  const panel = await context.newPage();
+  panel.on('pageerror', (e) => errors.push(`侧边栏 ${e.message}`));
+  await panel.setViewportSize({ width: 400, height: 900 });
+  await panel.goto(`chrome-extension://${extId}/src/panel/panel.html`);
+  await panel.waitForSelector('.topic');
+  if (await panel.isVisible('#keyBanner')) throw new Error('已经填了 key，不应该提示去填');
+  await panel.click('.topic button[data-draft]');
+  await panel.waitForSelector('.draft textarea', { timeout: 20000 });
+  const draftsShown = await panel.$$eval('.draft textarea', (els) => els.map((e) => e.value));
+  console.log('  草稿', draftsShown.length, draftsShown[0]);
+  if (draftsShown.length !== 3) throw new Error('应该生成 3 条草稿');
+  const call = llmCalls[llmCalls.length - 1];
+  if (call.headers['anthropic-version'] !== '2026-10-21' || call.headers['x-api-key'] !== 'sk-ant-test') throw new Error('模型请求头不对');
+  if ('temperature' in call.body || call.body.model !== 'claude-haiku-5-5') throw new Error('模型请求体不对');
+  if (!/GPT-6/.test(call.body.messages[0].content)) throw new Error('提示词里应该带上话题资料');
+  await panel.screenshot({ path: path.join(OUT, 'panel.png') });
+  // 新标签页打开得太快，Playwright 来不及拦截它的请求，所以只记下要打开的地址。
+  await panel.evaluate(() => { window.__opened = []; chrome.tabs.create = (o) => { window.__opened.push(o.url); return Promise.resolve({}); }; });
+  await panel.click('.draft button[data-act="compose"]');
+  const cu = new URL(await panel.evaluate(() => window.__opened[0]));
+  if (cu.origin !== 'https://x.com' || cu.pathname !== '/intent/post' || !/GPT-6/.test(cu.searchParams.get('text'))) throw new Error(`发推链接不对 ${cu}`);
+  // 引用一条推文
+  await panel.click('.topic button[data-quote]');
+  await until(async () => (await panel.$$('.draft')).length >= 6, 20000, '引用草稿');
+  const st2 = await send({ type: 'xa:trends' });
+  const quoteDraft = Object.entries(st2.state.drafts).find(([k]) => !k.endsWith('|post'));
+  if (!quoteDraft || !/^https:\/\/x\.com\/.+\/status\//.test(quoteDraft[1].quoteUrl)) throw new Error('引用草稿应该带上原推链接');
+  // 设置页能显示登记的列表
+  await opts.reload();
+  await opts.click('#tabs button[data-tab="settings"]');
+  const listsShown = await opts.inputValue('#listsAi');
+  if (!listsShown.includes(mock.LIST_IDS.ai)) throw new Error('设置页应该显示登记的列表');
+  if (!/已保存/.test(await opts.textContent('#llmKeyHint'))) throw new Error('设置页应该显示 key 已保存');
+  await opts.evaluate(() => { window.__errs = window.__errs || []; });
+  const exported = await opts.evaluate(() => chrome.storage.local.get(null).then((a) => Object.keys(a)));
+  if (!exported.includes('llmKey')) throw new Error('key 应该保存在本地');
+  await panel.close();
+  await xHome.close();
+
+  // 12. 弹窗
   const popup = await context.newPage();
   await popup.goto(`chrome-extension://${extId}/src/popup/popup.html`);
   await popup.waitForSelector('#status');

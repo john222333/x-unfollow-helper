@@ -6,6 +6,6 @@
     "message": "Unfollow Helper"
   },
   "extDescription": {
-    "message": "Filter your X following list and unfollow in slow batches in the background. Stops on X rate limits. Not affiliated with X."
+    "message": "Slow background unfollowing that stops on X limits, plus an AI/Web3 trends side panel with tweet drafts. Not affiliated with X."
   }
 }

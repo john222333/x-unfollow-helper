@@ -18,7 +18,7 @@
 
 **名称**（来自 `_locales`，不用手填）
 
-- 中文：X 取关助手：分批慢速取关
+- 中文：X 取关助手：分批取关 + 热点推文
 - English: Unfollow Helper for X
 
 **简短说明**（最多 132 个字符，来自 `_locales` 的 extDescription，不用手填）
@@ -42,8 +42,13 @@
 • 可撤销：在日志里一键重新关注
 • 重新读取会同步：已经不再关注的人自动移出列表，取关没生效的人会标出来
 
+AI / Web3 热点侧边栏
+• 汇总你登记的 X 列表、你刷到的首页推文、Hacker News、Hugging Face 论文、GitHub 新项目、CoinGecko 热搜和 RSS 新闻，按热度排序
+• 讲同一件事的推文和新闻合并成一个话题
+• 用你自己的模型 API key（Claude、OpenAI、DeepSeek 等）一键生成推文草稿，填进 X 的发推框，由你决定发不发；插件从不自动发推
+
 隐私
-所有数据只保存在你的浏览器里。插件只连接 X 自己的服务器，没有自己的服务器，不收集任何统计数据。代码开源。
+所有数据只保存在你的浏览器里。取关只连接 X 自己的服务器；热点功能只在你授权后读取公开新闻源，并把话题资料直接发给你自己选的模型服务商。没有自己的服务器，不收集任何统计数据。代码开源。
 
 说明
 本插件不是 X 官方产品，与 X Corp. 没有关系。批量取关属于 X 规则限制的自动化行为，即使按默认节奏也可能被限制，请自行判断。
@@ -64,8 +69,13 @@ Features
 • Undo: re-follow anyone from the log
 • Re-reading syncs the list: accounts you no longer follow are removed, and unfollows that didn't take effect are flagged
 
+AI / Web3 trends side panel
+• Rising topics from X lists you register, posts on your home timeline, Hacker News, Hugging Face papers, new GitHub projects, CoinGecko trending and RSS news, ranked by heat
+• Posts and articles about the same story are merged into one topic
+• Draft posts with your own model API key (Claude, OpenAI, DeepSeek and more). Drafts open in X's compose box; the extension never posts for you
+
 Privacy
-Everything stays in your browser. The extension only talks to X's own servers, has no server of its own and collects no analytics. Open source.
+Everything stays in your browser. Unfollowing only talks to X's own servers; the trends panel reads public news sources and sends topic material to the model provider you choose, only after you grant access. No server of its own, no analytics. Open source.
 
 Note
 Not affiliated with X Corp. Bulk unfollowing is automation that X's rules restrict; even at the default pace your account may be limited. Use at your own risk. The interface is currently in Chinese.
@@ -80,6 +90,7 @@ Not affiliated with X Corp. Bulk unfollowing is automation that X's rules restri
 | 截图 2：后台取关进行中 | `docs/store/screenshot-2-job.png` | 1280×800 |
 | 截图 3：日志与撤销 | `docs/store/screenshot-3-log.png` | 1280×800 |
 | 截图 4：节奏与保护设置 | `docs/store/screenshot-4-settings.png` | 1280×800 |
+| 截图 5：热点侧边栏与推文草稿 | `docs/store/screenshot-5-trends.png` | 1280×800 |
 | 小宣传图 | `docs/store/promo-small-440x280.png` | 440×280 |
 
 截图用的是模拟的 x.com 和虚构账号，重新生成：`node tests/e2e/store-shots.js`。
@@ -89,9 +100,11 @@ Not affiliated with X Corp. Bulk unfollowing is automation that X's rules restri
 **单一用途说明（Single purpose）**
 
 ```
-帮助用户管理自己在 x.com 上的关注列表：读取、筛选，并按用户选择分批取消关注（以及撤销时重新关注）。
-Helps users manage the accounts they follow on x.com: read and filter their Following list, and unfollow (or re-follow) the accounts they choose, in slow batches.
+帮助用户经营自己的 X（x.com）账号：整理关注列表（读取、筛选、按用户选择分批取关或重新关注），以及在侧边栏查看 AI / Web3 领域的热点话题并生成供用户自己发布的推文草稿。
+Helps users manage their own X (x.com) account: clean up their Following list (read, filter, and unfollow or re-follow the accounts they choose, in slow batches), and see AI / Web3 trending topics in a side panel with post drafts the user can publish themselves.
 ```
+
+> 两个功能放在一起，审核员可能按「单一用途」政策提出疑问。上面的说明把它们归到「经营自己的 X 账号」这一个用途下；如果被拒，可以把热点功能拆成独立插件再提交。
 
 **权限说明（Permission justification）**
 
@@ -104,6 +117,8 @@ Helps users manage the accounts they follow on x.com: read and filter their Foll
 | `scripting` | 插件安装或更新后，把内容脚本注入到已经打开的 x.com 页面，不用用户手动刷新。Injects the extension's own content scripts into already-open x.com tabs after install or update. |
 | `power` | 任务进行中阻止电脑自动休眠（屏幕仍会关闭），避免任务被打断；用户可以在设置里关闭。Keeps the system awake while a job is running so it isn't interrupted; the user can turn this off. |
 | 网站权限 `https://x.com/*` | 在 x.com 页面里读取关注列表、执行用户选择的取关，并核对登录的账号。Reads the Following list, performs the unfollows the user chose, and checks the logged-in account on x.com. |
+| `sidePanel` | 在浏览器侧边栏显示 AI / Web3 热点和推文草稿，用户可以一边看 x.com 一边写。Shows the trends and post drafts in the browser side panel next to x.com. |
+| 可选网站权限 `https://*/*`（只在用户点「保存」时按需申请具体网站） | 热点功能读取用户勾选的公开新闻源（Hacker News、Hugging Face、GitHub、CoinGecko、用户填写的 RSS），以及调用用户自己选择、自己提供 key 的模型服务商生成草稿。每个网站都要用户在浏览器对话框里同意，不开热点功能就不会申请。Optional, requested per site only when the user saves settings: reads the public news sources the user enables and calls the model provider the user chose with their own API key. Each site requires the user's approval in the browser prompt. |
 | 网站权限 `https://abs.twimg.com/*` | 下载 X 网页版公开的 JavaScript 文件（只读取文本，不执行），找到读取关注列表需要的接口参数。Downloads X's public web app JavaScript as text (never executed) to find the request parameters needed to read the Following list. |
 
 **是否使用远程代码（Remote code）**：否（No）。所有代码都打包在插件里。
@@ -114,6 +129,8 @@ Helps users manage the accounts they follow on x.com: read and filter their Foll
 
 - **网站内容（Website content）**：从 x.com 读取的关注列表（对方的公开资料），只保存在本地。
 - **个人身份信息（Personally identifiable information）**：用户自己的 x.com 用户名，用来核对账号，只保存在本地。
+- **身份验证信息（Authentication information）**：用户填写的模型 API key，只保存在本地，只发送给用户自己选的模型服务商。
+- 生成草稿时会把公开的话题资料发给用户自己选的模型服务商（用户主动点击才发送），在说明里如实写明。
 
 然后勾选三项承诺：不出售或转让给第三方；不用于与单一用途无关的目的；不用于判断信用或放贷。
 
@@ -128,5 +145,6 @@ Helps users manage the accounts they follow on x.com: read and filter their Foll
 
 - **X 的规则**：X 的自动化规则不允许批量取关。应用商店允许这类管理工具（商店里已有不少同类插件），但如果 X 投诉，插件可能被下架。说明里已经写明非官方、风险自担。
 - **商标**：名称用「for X / X 取关助手」这种描述性写法，图标没有用 X 的标志，符合商店对第三方品牌的要求。
-- **权限最少化**：已经去掉推文体检和它需要的其他网站权限；如果审核要求解释某个权限，用上面的说明。
+- **单一用途**：取关和热点推文是两个功能，可能被认为不符合单一用途。已经在单一用途说明里统一描述成「经营自己的 X 账号」，如果被拒，把热点功能拆成独立插件即可。
+- **权限最少化**：其他网站都是可选权限，按需申请；如果审核要求解释某个权限，用上面的说明。
 - **界面语言**：目前只有中文界面，英文用户可能看不懂。后续可以把界面文字也放进 `_locales` 做成双语。

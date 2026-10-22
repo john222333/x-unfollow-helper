@@ -27,7 +27,7 @@ const state = {
   rateLimitOnce: false, // 下一次读取第二页时返回一次 429
   ignoreUnfollow: false, // 取关接口返回成功，但实际没有取关（模拟 X 悄悄不执行）
   partialPages: 0, // 接下来几次读取后续页时返回「部分出错」的空数据（模拟 X 中途超时）
-  calls: { destroy: 0, create: 0, following: 0, settings: 0 },
+  calls: { destroy: 0, create: 0, following: 0, settings: 0, list: 0 },
 };
 
 function reset() {
@@ -38,10 +38,54 @@ function reset() {
   state.rateLimitOnce = false;
   state.ignoreUnfollow = false;
   state.partialPages = 0;
-  state.calls = { destroy: 0, create: 0, following: 0, settings: 0 };
+  state.calls = { destroy: 0, create: 0, following: 0, settings: 0, list: 0 };
 }
 
 const followed = () => USERS.filter((u) => state.following.has(u.id));
+
+// 热点功能用的推文。时间按「现在往前推几小时」生成，和 X 一样的 created_at 格式。
+const LIST_IDS = { ai: '1111111111', web3: '2222222222' };
+function twDate(hoursAgo) {
+  const d = new Date(Date.now() - hoursAgo * 3600000);
+  const day = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d.getUTCDay()];
+  const mon = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][d.getUTCMonth()];
+  const p2 = (n) => String(n).padStart(2, '0');
+  return `${day} ${mon} ${p2(d.getUTCDate())} ${p2(d.getUTCHours())}:${p2(d.getUTCMinutes())}:${p2(d.getUTCSeconds())} +0000 ${d.getUTCFullYear()}`;
+}
+const TWEETS = {
+  ai: [
+    { id: '7001', handle: 'ai_kol1', text: 'OpenAI just released GPT-6 with a new reasoning mode. Benchmarks look wild https://t.co/abc', url: 'https://openai.com/index/gpt-6', likes: 5200, rts: 900, h: 3 },
+    { id: '7002', handle: 'ai_kol2', text: 'GPT-6 reasoning mode tested: coding benchmarks jump, pricing stays the same', url: 'https://openai.com/index/gpt-6', likes: 1800, rts: 300, h: 2 },
+    { id: '7003', handle: 'ai_kol3', text: '开源大模型 Qwen4 发布，推理速度翻倍，本地部署门槛更低', url: '', likes: 600, rts: 120, h: 5 },
+  ],
+  web3: [
+    { id: '8001', handle: 'web3_kol1', text: '比特币 ETF 单日净流入创新高，$BTC 站上新台阶', url: 'https://www.coindesk.com/markets/btc-etf-inflow', likes: 3000, rts: 700, h: 1 },
+    { id: '8002', handle: 'web3_kol2', text: 'Solana memecoin season is back, DEX volume up 3x this week', url: '', likes: 900, rts: 150, h: 6 },
+  ],
+  home: [
+    { id: '9001', handle: 'friend1', text: 'Anthropic Claude update ships agentic coding features for teams', url: 'https://www.anthropic.com/news/x', likes: 400, rts: 60, h: 4 },
+    { id: '9002', handle: 'friend2', text: '今天天气不错，出去走走', url: '', likes: 10, rts: 0, h: 1 },
+  ],
+};
+
+function gqlTweet(t) {
+  return {
+    __typename: 'Tweet',
+    rest_id: t.id,
+    core: { user_results: { result: { __typename: 'User', rest_id: `u${t.id}`, core: { screen_name: t.handle, name: t.handle }, legacy: { followers_count: 50000 } } } },
+    views: { count: String(t.likes * 40) },
+    legacy: {
+      full_text: t.text, created_at: twDate(t.h), lang: 'en', id_str: t.id,
+      favorite_count: t.likes, retweet_count: t.rts, reply_count: Math.round(t.likes / 20), quote_count: Math.round(t.rts / 5),
+      entities: { urls: t.url ? [{ expanded_url: t.url, url: 'https://t.co/abc' }] : [] },
+    },
+  };
+}
+
+function timeline(tweets) {
+  const entries = tweets.map((t) => ({ entryId: `tweet-${t.id}`, content: { entryType: 'TimelineTimelineItem', itemContent: { itemType: 'TimelineTweet', tweet_results: { result: gqlTweet(t) } } } }));
+  return { data: { list: { tweets_timeline: { timeline: { instructions: [{ type: 'TimelineAddEntries', entries }] } } } } };
+}
 
 function gqlUser(u) {
   return {
@@ -139,12 +183,14 @@ function profileHtml(handle) {
 }
 
 function homeHtml() {
-  return page('<div data-testid="tweet">首页</div>');
+  // 像真实首页一样请求时间线，插件旁听到后把 AI / Web3 推文算进热点。
+  return page('<div data-testid="tweet">首页</div>', `fetch('/i/api/graphql/home/HomeTimeline?variables=' + encodeURIComponent('{"count":20}')).then(r => r.json());`);
 }
 
 // X 前端代码里登记 GraphQL 操作的写法（这里写成合法的 JS，页面加载时不会报错）。
 const MAIN_JS_BODY = `window.__mockOps = [
   {queryId:"zzz",operationName:"Followers",operationType:"query",metadata:{featureSwitches:["rweb_tipjar_consumption_enabled"],fieldToggles:[]}},
+  {queryId:"lst",operationName:"ListLatestTweetsTimeline",operationType:"query",metadata:{featureSwitches:["rweb_tipjar_consumption_enabled"],fieldToggles:[]}},
   {queryId:"${QID}",operationName:"Following",operationType:"query",metadata:{featureSwitches:["rweb_tipjar_consumption_enabled","verified_phone_label_enabled","responsive_web_graphql_exclude_directive_enabled"],fieldToggles:["withAuxiliaryUserLabels"]}}
 ];`;
 
@@ -169,6 +215,15 @@ async function apiRoute(r, url, p) {
 
   if (p.startsWith('/i/api/graphql/')) {
     const m = /^\/i\/api\/graphql\/([\w-]+)\/(\w+)$/.exec(p);
+    if (m && m[1] === 'home' && m[2] === 'HomeTimeline') return json(r, 200, timeline(TWEETS.home));
+    if (m && m[1] === 'lst' && m[2] === 'ListLatestTweetsTimeline') {
+      state.calls.list++;
+      if (!url.searchParams.get('features')) return json(r, 400, { errors: [{ message: 'features cannot be null' }] });
+      const { listId } = JSON.parse(url.searchParams.get('variables') || '{}');
+      const tp = Object.keys(LIST_IDS).find((k) => LIST_IDS[k] === listId);
+      if (!tp) return json(r, 404, { errors: [{ code: 34, message: 'List not found' }] });
+      return json(r, 200, timeline(TWEETS[tp]));
+    }
     if (!m || m[1] !== QID || m[2] !== 'Following') return json(r, 404, { errors: [{ message: 'Query not found' }] });
     if (fromPlugin && state.collectApiBroken) return r.fulfill({ status: 404, body: '' });
     if (!url.searchParams.get('features')) return json(r, 400, { errors: [{ message: 'The following features cannot be null: rweb_tipjar_consumption_enabled' }] });
@@ -218,6 +273,7 @@ async function route(r) {
     return json(r, 200, { ok: true });
   }
   if (p === '/home' || p === '/') return html(homeHtml());
+  if (p === '/intent/post') return html(page('<div data-testid="tweetTextarea_0">发推框</div>'));
   if (p === `/${ME.handle}/following`) return html(followingHtml());
   const m = /^\/([A-Za-z0-9_]+)\/?$/.exec(p);
   if (m) return html(profileHtml(m[1]));
@@ -237,4 +293,4 @@ const COOKIES = [
   { name: 'twid', value: `u%3D${ME.id}`, domain: '.x.com', path: '/', secure: true, sameSite: 'None' },
 ];
 
-module.exports = { route, routeStatic, USERS, ME, state, reset, COOKIES };
+module.exports = { route, routeStatic, USERS, ME, state, reset, COOKIES, LIST_IDS, TWEETS };

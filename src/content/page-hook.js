@@ -1,11 +1,12 @@
 // 运行在 x.com 页面自身的环境（MAIN world）。
-// 只「旁听」页面自己发出的关注列表请求，把返回的数据转交给插件；不发任何额外请求，也不修改请求。
+// 只「旁听」页面自己发出的关注列表、首页和列表时间线请求，把返回的数据转交给插件；不发任何额外请求，也不修改请求。
 (function () {
   'use strict';
   if (window.__xaHookInstalled) return;
   window.__xaHookInstalled = true;
 
-  const WATCH = /\/graphql\/[^/]+\/(Following)\b/;
+  // 首页和列表的推文用于热点功能：你平时刷到的 AI / Web3 推文也会算进热度里。
+  const WATCH = /\/graphql\/[^/]+\/(Following|HomeTimeline|HomeLatestTimeline|ListLatestTweetsTimeline)\b/;
 
   // 插件的内容脚本比这里晚加载，先到的数据缓存几份，等它来要时再发一遍。
   const buffer = [];
@@ -19,6 +20,9 @@
     if (!m) return;
     try {
       const msg = { source: 'xa-hook', op: m[1], data: JSON.parse(text) };
+      if (m[1] === 'ListLatestTweetsTimeline') {
+        try { msg.listId = JSON.parse(new URL(url, location.origin).searchParams.get('variables') || '{}').listId || null; } catch { msg.listId = null; }
+      }
       if (msg.op === 'Following') {
         buffer.push(msg);
         if (buffer.length > 5) buffer.shift();

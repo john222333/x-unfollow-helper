@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>X 取关助手 · 热点</title>
+  <link rel="stylesheet" href="panel.css">
+</head>
+<body>
+  <header class="top">
+    <div class="row">
+      <div class="brand">热点与推文建议</div>
+      <span class="spacer"></span>
+      <button class="btn small" id="refreshBtn" title="重新读取各个来源">刷新</button>
+      <button class="btn small ghost" id="settingsBtn" title="来源、X 列表和模型设置">设置</button>
+    </div>
+    <nav class="seg" id="topicTabs">
+      <button data-topic="ai" class="on">AI</button>
+      <button data-topic="web3">Web3</button>
+    </nav>
+    <div class="status muted small" id="status"></div>
+  </header>
+
+  <main>
+    <div class="banner" id="offBanner" hidden>热点功能已关闭，可以在设置里打开。</div>
+    <div class="banner" id="keyBanner" hidden>填写你自己的模型 API key 后，就能一键生成推文草稿。<button class="link" data-go="settings">去设置</button></div>
+    <div class="banner soft" id="listBanner" hidden>提示：在设置里登记你关注的 AI / Web3 博主列表（X 列表），热度会更准。没有登记时只用你在 x.com 首页刷到的推文和外部新闻源。</div>
+    <details class="errors" id="errors" hidden><summary id="errorsSum"></summary><ul id="errorList"></ul></details>
+    <div id="topics"></div>
+    <p class="muted small empty" id="empty" hidden></p>
+  </main>
+
+  <script src="../lib/trends.js"></script>
+  <script src="../lib/llm.js"></script>
+  <script src="../lib/store.js"></script>
+  <script src="../lib/msg.js"></script>
+  <script src="panel.js"></script>
+</body>
+</html>

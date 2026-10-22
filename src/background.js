@@ -1,6 +1,6 @@
 // Service worker：执行环境、取关调度、关注列表读取与合并。
 // 所有节奏控制都在这里做，内容脚本只负责在 x.com 页面里发请求或点按钮。
-importScripts('lib/store.js', 'lib/xapi.js');
+importScripts('lib/trends.js', 'lib/llm.js', 'lib/store.js', 'lib/xapi.js');
 
 const S = self.XAStore;
 const TICK_ALARM = 'xa-tick';
@@ -320,13 +320,15 @@ async function getXmeta() {
 }
 
 // 在 x.com 页面里调用接口。页面被关掉或没响应时换一个页面再试一次。
-async function apiCall(req) {
+// noCreate：只借用已经打开的 x.com 页面，没有就算了（热点刷新不为此新开标签页）。
+async function apiCall(req, opts) {
   const xmeta = await getXmeta();
   const full = { ...req, bearer: xmeta.bearer || self.XAPI.WEB_BEARER };
   for (let attempt = 0; attempt < 2; attempt++) {
     let tabId;
     try {
-      tabId = await getContextTab(true);
+      tabId = await getContextTab(!(opts && opts.noCreate));
+      if (!tabId) return { status: 0, error: 'no_context' };
     } catch (e) {
       return { status: 0, error: `no_context: ${e.message}` };
     }
@@ -473,15 +475,15 @@ async function claimOwner(handle, userId) {
   await store.set({ owner: { handle, userId: id, at: Date.now() } });
 }
 
-// 找到 Following 这个 GraphQL 操作的 queryId 和参数：页面上记下来的优先，没有就从 X 的前端代码里找。
-async function getFollowingOp(scripts, refresh) {
+// 找到某个 GraphQL 操作（Following、ListLatestTweetsTimeline）的 queryId 和参数：页面上记下来的优先，没有就从 X 的前端代码里找。
+async function getGqlOp(name, scripts, refresh) {
   const xmeta = await getXmeta();
-  const cached = xmeta.ops && xmeta.ops.Following;
+  const cached = xmeta.ops && xmeta.ops[name];
   if (cached && cached.qid && !refresh) return cached;
   for (const src of scripts || []) {
     try {
       const text = await (await fetch(src)).text();
-      const op = self.XAPI.findOperation(text, 'Following');
+      const op = self.XAPI.findOperation(text, name);
       if (op) {
         const found = {
           qid: op.qid,
@@ -490,7 +492,7 @@ async function getFollowingOp(scripts, refresh) {
           at: Date.now(),
           from: 'bundle',
         };
-        await saveXmeta({ ops: { Following: found } });
+        await saveXmeta({ ops: { [name]: found } });
         return found;
       }
     } catch {
@@ -499,6 +501,7 @@ async function getFollowingOp(scripts, refresh) {
   }
   return cached && cached.qid ? cached : null;
 }
+const getFollowingOp = (scripts, refresh) => getGqlOp('Following', scripts, refresh);
 
 const saveXmeta = (patch) => withLock(async () => {
   const xmeta = await getXmeta();
@@ -1277,10 +1280,10 @@ async function handle(msg, sender) {
       if (typeof m.bearer === 'string' && m.bearer.length > 20) patch.bearer = m.bearer;
       if (m.gql && m.gql.name && m.gql.qid) {
         if (m.gql.features && typeof m.gql.features === 'object') patch.features = m.gql.features;
-        if (m.gql.name === 'Following') {
-          const prev = (await getXmeta()).ops.Following || {};
+        if (m.gql.name === 'Following' || m.gql.name === 'ListLatestTweetsTimeline') {
+          const prev = (await getXmeta()).ops[m.gql.name] || {};
           patch.ops = {
-            Following: {
+            [m.gql.name]: {
               ...prev,
               qid: m.gql.qid,
               featureNames: m.gql.features ? Object.keys(m.gql.features) : prev.featureNames || null,
@@ -1397,6 +1400,12 @@ async function handle(msg, sender) {
     case 'xa:openOptions':
       await chrome.runtime.openOptionsPage();
       return { ok: true };
+    case 'xa:tweets':
+    case 'xa:trends':
+    case 'xa:trendsRefresh':
+    case 'xa:draft':
+    case 'xa:llmTest':
+      return self.XATrendsBG.handle(msg);
     default:
       return { error: `unknown message ${msg && msg.type}` };
   }
@@ -1501,3 +1510,6 @@ chrome.runtime.onStartup.addListener(async () => {
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'local' && changes.settings) kick();
 });
+
+// 热点与推文建议。放在最后载入：它要用到上面定义的工具函数。
+importScripts('trends-bg.js');

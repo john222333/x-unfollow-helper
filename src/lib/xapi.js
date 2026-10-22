@@ -79,6 +79,16 @@
     return { method: 'GET', path: `/i/api/graphql/${op.qid}/Following`, query };
   }
 
+  // 列表最新推文（热点功能读取你挑的 AI / Web3 列表）。
+  function listTweetsRequest(op, listId, seenFeatures) {
+    const query = {
+      variables: JSON.stringify({ listId: String(listId), count: 100 }),
+      features: JSON.stringify(buildFeatures(op.featureNames, { ...(seenFeatures || {}), ...(op.features || {}) })),
+    };
+    if (op.fieldToggles) query.fieldToggles = JSON.stringify(op.fieldToggles);
+    return { method: 'GET', path: `/i/api/graphql/${op.qid}/ListLatestTweetsTimeline`, query };
+  }
+
   // 从 X 的前端代码里找某个 GraphQL 操作的 queryId 和需要的 features 名单。
   function findOperation(jsText, name) {
     const re = new RegExp(`queryId:"([\\w-]+)",operationName:"${name}",operationType:"\\w+",metadata:\\{featureSwitches:\\[([^\\]]*)\\],fieldToggles:\\[([^\\]]*)\\]`);
@@ -173,6 +183,62 @@
     return found;
   }
 
+  // ---------- 解析推文 ----------
+
+  const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+
+  function fromGraphQLTweet(o) {
+    let t = o;
+    if (t && t.__typename === 'TweetWithVisibilityResults') t = t.tweet;
+    if (!t || !t.legacy || !t.rest_id) return null;
+    const L = t.legacy;
+    // 转推：热度和内容都算原推的。
+    const rt = L.retweeted_status_result && L.retweeted_status_result.result;
+    if (rt) return fromGraphQLTweet(rt);
+    const ur = t.core && t.core.user_results && t.core.user_results.result;
+    const U = (ur && ur.legacy) || {};
+    const UC = (ur && ur.core) || {};
+    const handle = UC.screen_name || U.screen_name;
+    if (!handle) return null;
+    const note = t.note_tweet && t.note_tweet.note_tweet_results && t.note_tweet.note_tweet_results.result;
+    const text = (note && note.text) || L.full_text || '';
+    const urls = ((L.entities && L.entities.urls) || []).map((u) => u.expanded_url).filter(Boolean);
+    const created = Date.parse(L.created_at);
+    return {
+      id: String(t.rest_id),
+      handle,
+      name: UC.name || U.name || handle,
+      followers: num(U.followers_count),
+      text: text.replace(/https:\/\/t\.co\/\w+/g, '').trim(),
+      urls,
+      lang: L.lang || '',
+      createdAt: Number.isFinite(created) ? created : 0,
+      likes: num(L.favorite_count),
+      retweets: num(L.retweet_count),
+      replies: num(L.reply_count),
+      quotes: num(L.quote_count),
+      views: num(t.views && t.views.count),
+      isReply: !!L.in_reply_to_status_id_str,
+    };
+  }
+
+  // 递归找出时间线响应里的推文（首页、列表都是这个结构），按 ID 去重。
+  function parseTweets(data) {
+    const out = [];
+    const seen = new Set();
+    (function walk(o, depth) {
+      if (!o || typeof o !== 'object' || depth > 60) return;
+      if (Array.isArray(o)) { for (const x of o) walk(x, depth + 1); return; }
+      if (o.tweet_results && o.tweet_results.result) {
+        const tw = fromGraphQLTweet(o.tweet_results.result);
+        if (tw && !seen.has(tw.id)) { seen.add(tw.id); out.push(tw); }
+        return;
+      }
+      for (const k of Object.keys(o)) walk(o[k], depth + 1);
+    })(data, 0);
+    return out;
+  }
+
   // ---------- 结果判断 ----------
 
   function errorsOf(r) {
@@ -214,5 +280,6 @@
   root.XAPI = {
     WEB_BEARER, DEFAULT_FEATURES, friendshipRequest, settingsRequest, followingRequest, buildFeatures, findOperation, hasTimeline,
     fromGraphQLUser, parseGraphQLUsers, bottomCursor, classifyFriendship, apiUnavailable,
+    listTweetsRequest, fromGraphQLTweet, parseTweets,
   };
 })(typeof globalThis !== 'undefined' ? globalThis : self);

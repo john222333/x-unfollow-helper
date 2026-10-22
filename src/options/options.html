@@ -147,6 +147,40 @@
           </label>
         </div>
       </div>
+      <div class="card" id="trendsCard">
+        <div class="row"><h3 style="margin:0">热点与推文建议</h3><span class="spacer"></span><button class="btn" id="openPanel">打开热点侧边栏</button></div>
+        <p class="muted small">在浏览器侧边栏看正在升温的 AI / Web3 话题，一键生成推文草稿，填进 X 的发推框后由你自己决定发不发。插件不会替你发推。</p>
+        <div class="form">
+          <label class="check"><input type="checkbox" id="trendsEnabled"> 开启热点功能</label>
+          <label>AI 博主列表 <span style="flex:1"><textarea id="listsAi" rows="2" placeholder="每行一个 X 列表链接，例如 https://x.com/i/lists/1234567890"></textarea></span></label>
+          <label>Web3 博主列表 <span style="flex:1"><textarea id="listsWeb3" rows="2" placeholder="每行一个 X 列表链接"></textarea></span></label>
+          <p class="muted small">在 X 上建一个列表（公开或私密都行），把你认可的 AI 或 Web3 博主加进去，再把列表链接贴到这里。插件借用你开着的 x.com 页面读取列表里的最新推文，按互动增速算热度；最多各 5 个列表。不登记也能用，只是热度来自你刷到的首页推文和下面的外部来源。</p>
+          <div class="checks">
+            <label class="check"><input type="checkbox" id="srcHome"> 我在 x.com 首页刷到的 AI / Web3 推文</label>
+            <label class="check"><input type="checkbox" id="srcHn"> Hacker News 首页（AI 相关）</label>
+            <label class="check"><input type="checkbox" id="srcHf"> Hugging Face 每日论文</label>
+            <label class="check"><input type="checkbox" id="srcGh"> GitHub 一周内新起的大模型项目</label>
+            <label class="check"><input type="checkbox" id="srcCg"> CoinGecko 热搜币</label>
+            <label class="check"><input type="checkbox" id="srcRss"> 下面的 RSS 新闻源</label>
+          </div>
+          <label>AI 新闻 RSS <span style="flex:1"><textarea id="rssAi" rows="2" placeholder="每行一个 https 开头的 RSS 地址"></textarea></span></label>
+          <label>Web3 新闻 RSS <span style="flex:1"><textarea id="rssWeb3" rows="2" placeholder="每行一个 https 开头的 RSS 地址"></textarea></span></label>
+          <label>自动刷新 <span>打开侧边栏时，数据超过 <input type="number" id="autoRefreshMin" min="10" max="240" style="width:72px"> 分钟就重新读取</span></label>
+        </div>
+      </div>
+      <div class="card" id="llmCard">
+        <h3>推文草稿用的模型</h3>
+        <div class="form">
+          <label>服务商 <span><select id="llmProvider"></select></span></label>
+          <label>模型 <span><input type="text" id="llmModel" style="width:240px"></span><em id="llmModelHint"></em></label>
+          <label id="llmBaseRow">接口地址 <span><input type="text" id="llmBase" style="width:320px" placeholder="https://…/v1（兼容 OpenAI 的 chat/completions 接口）"></span></label>
+          <label>API key <span><input type="password" id="llmKey" style="width:320px" autocomplete="off"></span><em id="llmKeyHint"></em></label>
+          <label>草稿语言 <span><select id="llmLang"><option value="zh">中文</option><option value="en">英文</option><option value="both">两条中文一条英文</option></select></span></label>
+          <label>账号定位 <span style="flex:1"><textarea id="llmPersona" rows="2" placeholder="可选。例如：AI 产品经理，说话直接、偏理性，喜欢讲落地案例；不喊单"></textarea></span></label>
+        </div>
+        <div class="row"><button class="btn" id="llmTest">保存并测试连接</button><button class="btn" id="llmClear">删除保存的 key</button><span class="muted small" id="llmMsg"></span></div>
+        <p class="muted small">key 只保存在这台电脑的浏览器里，导出数据时也不会带上。生成草稿时，插件把话题标题、相关推文和新闻摘要直接发给你选的服务商，不经过其他服务器；费用由服务商按用量向你收取（用 Claude Haiku 或 DeepSeek，每次生成大约几分钱人民币）。</p>
+      </div>
       <div class="row"><button class="btn primary" id="saveBtn">保存设置</button><span class="muted small" id="saveMsg"></span></div>
       <div class="card">
         <h3>数据</h3>
@@ -154,12 +188,14 @@
           <button class="btn" id="exportAll">导出全部数据（JSON）</button>
           <button class="btn" id="clearUsers">清空关注列表缓存</button>
         </div>
-        <p class="muted small">所有数据只保存在这台电脑的浏览器里。取关和读取列表是在 x.com 页面里调用 X 网页版自己的接口，用的是浏览器已有的登录状态（和你在页面上点按钮发出的请求一样），登录信息不会被保存或发送到别处。除了 X 自己的网站和服务器（x.com、存放网页代码的 abs.twimg.com、显示头像用的 pbs.twimg.com），插件不连接任何服务器，也不收集任何统计数据。卸载插件会删除这里的全部数据。</p>
+        <p class="muted small">所有数据只保存在这台电脑的浏览器里。取关和读取列表是在 x.com 页面里调用 X 网页版自己的接口，用的是浏览器已有的登录状态（和你在页面上点按钮发出的请求一样），登录信息不会被保存或发送到别处。取关功能只连接 X 自己的网站和服务器（x.com、存放网页代码的 abs.twimg.com、显示头像用的 pbs.twimg.com）。热点功能另外会读取你在上面勾选的公开新闻源，生成草稿时连接你选的模型服务商，这些网站都要你点「保存」时授权才会访问。插件不收集任何统计数据。卸载插件会删除这里的全部数据。</p>
         <p class="muted small">本插件不是 X 官方产品。自动取关不符合 X 的自动化规则，即使按默认节奏也有被限制的风险，请自行承担。</p>
       </div>
     </section>
   </main>
 
+  <script src="../lib/trends.js"></script>
+  <script src="../lib/llm.js"></script>
   <script src="../lib/store.js"></script>
   <script src="../lib/msg.js"></script>
   <script src="options.js"></script>

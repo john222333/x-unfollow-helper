@@ -13,7 +13,7 @@
   };
 
   // 设置结构的版本。改了默认值、需要迁移老用户已保存的设置时加 1。
-  const SETTINGS_VERSION = 3;
+  const SETTINGS_VERSION = 4;
 
   const DEFAULT_SETTINGS = {
     v: SETTINGS_VERSION,
@@ -54,9 +54,11 @@
     const v = Number(src.v) || 1;
     // v1 默认每批都要手动确认；v2 起默认自动执行。
     if (v < 2) src.confirmEachBatch = false;
-    // v3 去掉了推文体检，连同保存的 LLM 接口密钥一起删掉。
-    delete src.llm;
-    delete src.ui;
+    // v3 去掉了推文体检，连同保存的 LLM 接口密钥一起删掉。v4 的热点功能重新用到 llm（key 另外存放）。
+    if (v < 3) {
+      delete src.llm;
+      delete src.ui;
+    }
     src.v = SETTINGS_VERSION;
     return src;
   }
@@ -69,6 +71,9 @@
       pace: normalizePace(src.pace),
       execMode: src.execMode === 'ui' ? 'ui' : 'auto',
       keepAwake: src.keepAwake !== false,
+      // 热点与推文建议（v4）。管理页、弹窗里没加载这两个文件时原样保留。
+      trends: root.XATrends ? root.XATrends.normalizeTrends(src.trends) : src.trends,
+      llm: root.XALLM ? root.XALLM.normalizeLLM(src.llm) : src.llm,
     };
   }
 

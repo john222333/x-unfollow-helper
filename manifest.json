@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "__MSG_extName__",
   "short_name": "__MSG_extShortName__",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "__MSG_extDescription__",
   "default_locale": "zh_CN",
   "minimum_chrome_version": "120",
@@ -18,11 +18,15 @@
     "alarms",
     "notifications",
     "scripting",
-    "power"
+    "power",
+    "sidePanel"
   ],
   "host_permissions": [
     "https://x.com/*",
     "https://abs.twimg.com/*"
+  ],
+  "optional_host_permissions": [
+    "https://*/*"
   ],
   "background": {
     "service_worker": "src/background.js"
@@ -58,6 +62,9 @@
       "16": "icons/icon16.png",
       "32": "icons/icon32.png"
     }
+  },
+  "side_panel": {
+    "default_path": "src/panel/panel.html"
   },
   "options_page": "src/options/options.html"
 }
