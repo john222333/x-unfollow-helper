@@ -372,3 +372,66 @@ test('打分去偏：大号打折、同一博主只算一个声音、只在关�
   // 太短的趋势词不乱配
   assert.strictEqual(XATrends.buildTopics([XATrends.xTrendItem({ name: 'Sam', domain: 'Technology AI' }, now), tw('41', 'z', 'sam altman says AI', 10, 10)], now).ai.length, 2);
 });
+
+// ---------- 多久没发推 ----------
+
+function userTweetsPage(entries, pinned) {
+  const mk = (id, author, created, extra) => ({ entryId: `tweet-${id}`, content: { itemContent: { tweet_results: { result: {
+    __typename: 'Tweet', rest_id: id, core: { user_results: { result: { __typename: 'User', rest_id: author } } },
+    legacy: { created_at: created, full_text: 'x', ...(extra || {}) },
+  } } } } });
+  const instructions = [];
+  if (pinned) instructions.push({ type: 'TimelinePinEntry', entry: mk(...pinned) });
+  instructions.push({ type: 'TimelineAddEntries', entries: entries.map((e) => mk(...e)) });
+  return { data: { user: { result: { __typename: 'User', timeline: { timeline: { instructions } } } } } };
+}
+
+test('最近发推时间：取本人推文的最大时间，置顶旧推和别人的推文不影响', () => {
+  const data = userTweetsPage([
+    ['1', '42', 'Mon Mar 02 10:00:00 +0000 2026'],
+    ['2', '77', 'Mon Oct 19 10:00:00 +0000 2026'], // 回复串里别人的推文
+    ['3', '42', 'Sun Feb 01 10:00:00 +0000 2026'],
+  ], ['9', '42', 'Fri Jan 03 10:00:00 +0000 2020']);
+  const r = XAPI.lastActivity(data, '42');
+  assert.strictEqual(r.state, 'ok');
+  assert.strictEqual(r.count, 3);
+  assert.strictEqual(r.lastAt, Date.parse('Mon Mar 02 10:00:00 +0000 2026'));
+  // 置顶的推文比时间线里的都新时，也算数（它确实是最近发的）。
+  const pinNewest = XAPI.lastActivity(userTweetsPage([['1', '42', 'Mon Mar 02 10:00:00 +0000 2026']], ['9', '42', 'Mon Oct 19 10:00:00 +0000 2026']), '42');
+  assert.strictEqual(pinNewest.lastAt, Date.parse('Mon Oct 19 10:00:00 +0000 2026'));
+});
+
+test('最近发推时间：看不到推文、账号不可用、返回不是时间线', () => {
+  assert.strictEqual(XAPI.lastActivity(userTweetsPage([['2', '77', 'Mon Oct 19 10:00:00 +0000 2026']]), '42').state, 'empty');
+  assert.strictEqual(XAPI.lastActivity({ data: { user: { result: { __typename: 'UserUnavailable' } } } }, '42').state, 'unavailable');
+  assert.strictEqual(XAPI.lastActivity({ data: { user: {} } }, '42').state, 'unavailable');
+  assert.strictEqual(XAPI.lastActivity({ errors: [{ message: 'x' }] }, '42').state, 'bad');
+});
+
+test('请求：优先带回复的时间线', () => {
+  const r = XAPI.userTweetsRequest({ qid: 'q1', name: 'UserTweetsAndReplies', featureNames: ['a'] }, 42);
+  assert.strictEqual(r.path, '/i/api/graphql/q1/UserTweetsAndReplies');
+  assert.strictEqual(JSON.parse(r.query.variables).userId, '42');
+  assert.strictEqual(XAPI.userTweetsRequest({ qid: 'q2', name: 'UserTweets' }, 1).path, '/i/api/graphql/q2/UserTweets');
+});
+
+test('多久没发推：天数、显示文字、要不要重新检查', () => {
+  const now = Date.parse('2026-10-24T00:00:00Z');
+  const day = 86400000;
+  const u = { id: '1', activity: 'ok', lastTweetAt: now - 200 * day, activityAt: now - day, tweets: 10 };
+  assert.strictEqual(XAStore.inactiveDays(u, now), 200);
+  assert.strictEqual(XAStore.activityText(u, now), '6 个月前');
+  assert.strictEqual(XAStore.needsActivityCheck(u, now), false);
+  assert.strictEqual(XAStore.needsActivityCheck({ ...u, activityAt: now - 20 * day }, now), true);
+  assert.strictEqual(XAStore.needsActivityCheck({ id: '1', tweets: 5 }, now), true);
+  // 没检查过、看不到推文的人不算「不活跃」，避免误取关。
+  assert.strictEqual(XAStore.inactiveDays({ id: '1', tweets: 5 }, now), null);
+  assert.strictEqual(XAStore.inactiveDays({ id: '1', tweets: 5, activity: 'empty', activityAt: now }, now), null);
+  // 推文数为 0：不用查，按注册了多久算。
+  const never = { id: '2', tweets: 0, createdAt: 'Mon Jan 01 00:00:00 +0000 2024' };
+  assert.strictEqual(XAStore.needsActivityCheck(never, now), false);
+  assert.ok(XAStore.inactiveDays(never, now) > 365);
+  assert.strictEqual(XAStore.activityText(never, now), '从没发过');
+  assert.strictEqual(XAStore.activityText({ ...u, lastTweetAt: now - 400 * day }, now), '1.1 年前');
+  assert.strictEqual(XAStore.activityText({ ...u, lastTweetAt: now - 3 * day, activityApprox: true }, now), '3 天内');
+});

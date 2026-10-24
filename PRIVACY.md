@@ -13,6 +13,7 @@ X 取关助手（以下称「本插件」）是一个开源的 Chrome 插件，�
 | 数据 | 用途 | 保存在哪里 |
 | --- | --- | --- |
 | 你关注的账号的公开资料：用户名、显示名、简介、头像地址、粉丝数、关注数、推文数、是否回关你、账号 ID | 在管理页里列出、筛选，执行取关 | 只在你的浏览器里（`chrome.storage.local`） |
+| 你点「检查多久没发推」时：每个关注对象最近一次发帖的时间（只记时间，不保存推文内容） | 按「多久没发推」筛选 | 只在你的浏览器里 |
 | 你的 x.com 用户名 | 核对执行取关时登录的是不是关注列表的主人 | 只在你的浏览器里 |
 | 取关队列、白名单、操作日志、设置 | 按节奏执行任务、撤销、显示进度 | 只在你的浏览器里 |
 | X 网页版的接口参数（GraphQL 的 queryId 和 features，以及网页版公开的应用令牌） | X 更新网页版后仍能读取关注列表 | 只在你的浏览器里 |
@@ -66,6 +67,7 @@ Unfollow Helper for X ("the extension") is an open-source Chrome extension that 
 | Data | Purpose | Where it is stored |
 | --- | --- | --- |
 | Public profile data of accounts you follow: handle, display name, bio, avatar URL, follower/following/post counts, whether they follow you, account ID | Listing, filtering and unfollowing in the dashboard | Only in your browser (`chrome.storage.local`) |
+| When you click "Check last post time": the time of each followed account's most recent post (time only, no post content) | Filtering by how long since they last posted | Only in your browser |
 | Your x.com handle | Checking that the logged-in account owns the list before acting | Only in your browser |
 | Unfollow queue, whitelist, action log, settings | Pacing the job, undo, progress | Only in your browser |
 | X web app request parameters (GraphQL queryId and features, and the web app's public app token) | Keep reading the Following list working after X updates its web app | Only in your browser |

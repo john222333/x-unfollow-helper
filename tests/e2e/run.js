@@ -332,6 +332,43 @@ const errors = [];
   });
   if (!(eta.days >= 1)) throw new Error('150 人应该要跨天');
 
+  // 多久没发推：后台逐个检查最近发推时间，按档位筛选
+  console.log('▶ 多久没发推');
+  await opts.click('#tabs button[data-tab="users"]');
+  // 前面测试勾选的标签筛选先去掉
+  while (await opts.$('#tagFilters label.on')) await opts.click('#tagFilters label.on');
+  await opts.selectOption('#inactive', '6m');
+  const hint = await until(async () => (await opts.isVisible('#inactiveBanner')) && await opts.textContent('#inactiveText'), 5000, '没检查过的提示');
+  console.log('  ', hint);
+  await opts.click('#activityBtn');
+  const act = await until(async () => { const a = await get('activity'); return a && a.status !== 'running' ? a : null; }, 180000, '检查完成');
+  const uAct = await get('users');
+  console.log('  结果', act.status, act.message, `检查 ${act.done} 人，请求 ${mock.state.calls.userTweets} 次`);
+  if (act.status !== 'done') throw new Error(`检查应该完成：${JSON.stringify(act)}`);
+  const wl = (await get('whitelist')) || {};
+  for (const u of Object.values(uAct)) {
+    if (wl[u.key]) continue;
+    const mu = mock.USERS.find((x) => x.id === u.id);
+    if (u.tweets === 0) { if (u.activityAt) throw new Error('零推文的人不用查'); continue; }
+    if (u.handle === 'user13') { if (u.activity !== 'unavailable') throw new Error('冻结的账号应该标成不可用'); continue; }
+    const days = Math.floor((Date.now() - u.lastTweetAt) / 86400000);
+    if (u.activity !== 'ok' || Math.abs(days - mock.lastDays(mu)) > 1) throw new Error(`@${u.handle} 最近发推应该是 ${mock.lastDays(mu)} 天前，实际 ${u.activity} ${days}`);
+  }
+  // 筛选「超过半年」：只有查过、而且确实超过 180 天的人（加上注册很久、从没发过推的人）。
+  await sleep(500);
+  const expect6m = Object.values(uAct).filter((u) => !wl[u.key] && (u.tweets === 0 || (u.activity === 'ok' && mock.lastDays(mock.USERS.find((x) => x.id === u.id)) >= 180))).length;
+  const sum6m = await opts.textContent('#userSummary');
+  console.log('  ', sum6m, '| 列', await opts.textContent('#userRows tr:first-child td.act'));
+  if (!sum6m.includes(`筛选出 ${expect6m} 人`)) throw new Error(`超过半年应该筛选出 ${expect6m} 人`);
+  if (!(await opts.isHidden('#inactiveBanner'))) throw new Error('都查过后不应该再提示');
+  await opts.screenshot({ path: path.join(OUT, 'inactive.png'), fullPage: true });
+  // 两周内再点检查：不重复请求
+  const before2 = mock.state.calls.userTweets;
+  await send({ type: 'xa:activityStart' });
+  await sleep(1000);
+  if (mock.state.calls.userTweets !== before2) throw new Error('两周内检查过的人不应该重复请求');
+  await opts.selectOption('#inactive', '');
+
   // 11. 热点与推文建议
   console.log('▶ 热点与推文建议');
   const llmCalls = await mockSources.install(context);

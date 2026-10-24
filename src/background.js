@@ -426,6 +426,14 @@ const mergeUsers = (users, runId) => withLock(async () => {
       merged[k] = v;
     }
     if (u.source === 'graphql') merged.gql = true;
+    // 检查过最近发推时间的人，推文数比上次读取时多了：说明上次读取之后 TA 发过推，不能再算「很久没发推」。
+    if (prev && prev.activityAt && Number.isFinite(u.tweets) && Number.isFinite(prev.tweets) && u.tweets > prev.tweets && prev.lastSeen) {
+      if (!(prev.lastTweetAt >= prev.lastSeen)) {
+        merged.activity = 'ok';
+        merged.lastTweetAt = prev.lastSeen;
+        merged.activityApprox = true;
+      }
+    }
     merged.key = key;
     merged.lastSeen = now;
     if (runId) merged.runId = runId;
@@ -964,6 +972,7 @@ async function tick() {
   ticking = true;
   try {
     await resumeCollectIfNeeded();
+    if (self.XAActivityBG) await self.XAActivityBG.resumeIfNeeded();
     await step();
   } catch (e) {
     console.error('[X 取关助手] tick 出错', e);
@@ -1243,17 +1252,20 @@ function updateKeepAwake(want) {
 
 async function scheduleNext() {
   const job = await getJob();
-  const { collect } = await store.get('collect');
+  const { collect, activity } = await store.get(['collect', 'activity']);
   await updateBadge();
   const collecting = collect && collect.status === 'running' && collect.mode === 'api';
+  const scanning = !!(activity && activity.status === 'running');
   const settings = await getSettings();
-  updateKeepAwake(!!settings.keepAwake && (job.status === 'running' || !!(collect && collect.status === 'running')));
-  if (job.status === 'running' || job.status === 'daily_cap' || collecting) {
+  updateKeepAwake(!!settings.keepAwake && (job.status === 'running' || !!(collect && collect.status === 'running') || scanning));
+  if (job.status === 'running' || job.status === 'daily_cap' || collecting || scanning) {
     const delay = Math.max(0, job.nextActionAt - Date.now());
     if (job.status === 'running' && delay < 25000) setTimeout(tick, delay + 100);
     // 读取被限速、很快就能继续时不等下一次闹钟。
     const wait = collecting && collect.waitingUntil ? collect.waitingUntil - Date.now() : -1;
     if (wait >= 0 && wait < 25000) setTimeout(tick, wait + 100);
+    const scanWait = scanning && activity.waitingUntil ? activity.waitingUntil - Date.now() : -1;
+    if (scanWait >= 0 && scanWait < 25000) setTimeout(tick, scanWait + 100);
     const existing = await chrome.alarms.get(TICK_ALARM);
     if (!existing) chrome.alarms.create(TICK_ALARM, { periodInMinutes: 0.5 });
   } else {
@@ -1280,7 +1292,7 @@ async function handle(msg, sender) {
       if (typeof m.bearer === 'string' && m.bearer.length > 20) patch.bearer = m.bearer;
       if (m.gql && m.gql.name && m.gql.qid) {
         if (m.gql.features && typeof m.gql.features === 'object') patch.features = m.gql.features;
-        if (m.gql.name === 'Following' || m.gql.name === 'ListLatestTweetsTimeline') {
+        if (['Following', 'ListLatestTweetsTimeline', 'UserTweets', 'UserTweetsAndReplies'].includes(m.gql.name)) {
           const prev = (await getXmeta()).ops[m.gql.name] || {};
           patch.ops = {
             [m.gql.name]: {
@@ -1407,6 +1419,9 @@ async function handle(msg, sender) {
     case 'xa:draft':
     case 'xa:llmTest':
       return self.XATrendsBG.handle(msg);
+    case 'xa:activityStart':
+    case 'xa:activityStop':
+      return self.XAActivityBG.handle(msg);
     default:
       return { error: `unknown message ${msg && msg.type}` };
   }
@@ -1512,5 +1527,5 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'local' && changes.settings) kick();
 });
 
-// 热点与推文建议。放在最后载入：它要用到上面定义的工具函数。
-importScripts('trends-bg.js');
+// 热点与推文建议、多久没发推的检查。放在最后载入：它们要用到上面定义的工具函数。
+importScripts('trends-bg.js', 'activity-bg.js');

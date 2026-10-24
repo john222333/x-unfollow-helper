@@ -27,7 +27,7 @@ const state = {
   rateLimitOnce: false, // 下一次读取第二页时返回一次 429
   ignoreUnfollow: false, // 取关接口返回成功，但实际没有取关（模拟 X 悄悄不执行）
   partialPages: 0, // 接下来几次读取后续页时返回「部分出错」的空数据（模拟 X 中途超时）
-  calls: { destroy: 0, create: 0, following: 0, settings: 0, list: 0 },
+  calls: { destroy: 0, create: 0, following: 0, settings: 0, list: 0, userTweets: 0 },
 };
 
 function reset() {
@@ -38,7 +38,7 @@ function reset() {
   state.rateLimitOnce = false;
   state.ignoreUnfollow = false;
   state.partialPages = 0;
-  state.calls = { destroy: 0, create: 0, following: 0, settings: 0, list: 0 };
+  state.calls = { destroy: 0, create: 0, following: 0, settings: 0, list: 0, userTweets: 0 };
 }
 
 const followed = () => USERS.filter((u) => state.following.has(u.id));
@@ -91,6 +91,26 @@ const X_TRENDS = [
 function exploreSidebar() {
   const items = X_TRENDS.map((t) => ({ item: { itemContent: { itemType: 'TimelineTrend', name: t.name, trend_metadata: { domain_context: t.domain, meta_description: t.meta } } } }));
   return { data: { explore_sidebar: { timeline: { instructions: [{ type: 'TimelineAddEntries', entries: [{ entryId: 'trends', content: { entryType: 'TimelineTimelineModule', items } }] }] } } } };
+}
+
+// 多久没发推：每个人最近一次发推是几天前。user13 的账号已冻结。
+const LAST_DAYS = [2, 40, 100, 200, 400];
+const lastDays = (u) => LAST_DAYS[Number(u.id) % 5];
+function userTweets(userId) {
+  const u = USERS.find((x) => x.id === userId);
+  if (!u || u.handle === 'user13') return { data: { user: { result: { __typename: 'UserUnavailable', reason: 'Suspended' } } } };
+  const tw = (id, author, h) => ({ entryId: `tweet-${id}`, content: { entryType: 'TimelineTimelineItem', itemContent: { itemType: 'TimelineTweet', tweet_results: { result: {
+    __typename: 'Tweet', rest_id: id, core: { user_results: { result: { __typename: 'User', rest_id: author } } }, legacy: { created_at: twDate(h), full_text: 't' },
+  } } } } });
+  const d = lastDays(u);
+  return { data: { user: { result: { __typename: 'User', timeline: { timeline: { instructions: [
+    { type: 'TimelinePinEntry', entry: tw(`p${u.id}`, u.id, 24 * 900) }, // 很久以前的置顶推文
+    { type: 'TimelineAddEntries', entries: [
+      tw(`o${u.id}`, '555', 1), // 回复串里别人的推文，昨天发的
+      tw(`a${u.id}`, u.id, 24 * d),
+      tw(`b${u.id}`, u.id, 24 * (d + 30)),
+    ] },
+  ] } } } } } };
 }
 
 function timeline(tweets) {
@@ -202,6 +222,7 @@ function homeHtml() {
 // X 前端代码里登记 GraphQL 操作的写法（这里写成合法的 JS，页面加载时不会报错）。
 const MAIN_JS_BODY = `window.__mockOps = [
   {queryId:"zzz",operationName:"Followers",operationType:"query",metadata:{featureSwitches:["rweb_tipjar_consumption_enabled"],fieldToggles:[]}},
+  {queryId:"utr",operationName:"UserTweetsAndReplies",operationType:"query",metadata:{featureSwitches:["rweb_tipjar_consumption_enabled"],fieldToggles:["withArticlePlainText"]}},
   {queryId:"lst",operationName:"ListLatestTweetsTimeline",operationType:"query",metadata:{featureSwitches:["rweb_tipjar_consumption_enabled"],fieldToggles:[]}},
   {queryId:"${QID}",operationName:"Following",operationType:"query",metadata:{featureSwitches:["rweb_tipjar_consumption_enabled","verified_phone_label_enabled","responsive_web_graphql_exclude_directive_enabled"],fieldToggles:["withAuxiliaryUserLabels"]}}
 ];`;
@@ -229,6 +250,12 @@ async function apiRoute(r, url, p) {
     const m = /^\/i\/api\/graphql\/([\w-]+)\/(\w+)$/.exec(p);
     if (m && m[1] === 'home' && m[2] === 'HomeTimeline') return json(r, 200, timeline(TWEETS.home));
     if (m && m[1] === 'side' && m[2] === 'ExploreSidebar') return json(r, 200, exploreSidebar());
+    if (m && m[1] === 'utr' && m[2] === 'UserTweetsAndReplies') {
+      state.calls.userTweets++;
+      if (!url.searchParams.get('features')) return json(r, 400, { errors: [{ message: 'features cannot be null' }] });
+      const { userId } = JSON.parse(url.searchParams.get('variables') || '{}');
+      return json(r, 200, userTweets(String(userId)), { 'x-rate-limit-limit': '500', 'x-rate-limit-remaining': '400', 'x-rate-limit-reset': String(Math.floor(Date.now() / 1000) + 20) });
+    }
     if (m && m[1] === 'lst' && m[2] === 'ListLatestTweetsTimeline') {
       state.calls.list++;
       if (!url.searchParams.get('features')) return json(r, 400, { errors: [{ message: 'features cannot be null' }] });
@@ -306,4 +333,4 @@ const COOKIES = [
   { name: 'twid', value: `u%3D${ME.id}`, domain: '.x.com', path: '/', secure: true, sameSite: 'None' },
 ];
 
-module.exports = { route, routeStatic, USERS, ME, state, reset, COOKIES, LIST_IDS, TWEETS };
+module.exports = { route, routeStatic, USERS, ME, state, reset, COOKIES, LIST_IDS, TWEETS, lastDays };

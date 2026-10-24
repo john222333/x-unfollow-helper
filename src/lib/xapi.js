@@ -89,6 +89,19 @@
     return { method: 'GET', path: `/i/api/graphql/${op.qid}/ListLatestTweetsTimeline`, query };
   }
 
+  // 某个人的推文时间线（检查多久没发推）。UserTweetsAndReplies 连回复一起算，找不到时用 UserTweets。
+  function userTweetsRequest(op, userId, seenFeatures) {
+    const variables = { userId: String(userId), count: 20, includePromotedContent: false, withVoice: true };
+    if (op.name === 'UserTweetsAndReplies') variables.withCommunity = true;
+    else variables.withQuickPromoteEligibilityTweetFields = false;
+    const query = {
+      variables: JSON.stringify(variables),
+      features: JSON.stringify(buildFeatures(op.featureNames, { ...(seenFeatures || {}), ...(op.features || {}) })),
+    };
+    if (op.fieldToggles) query.fieldToggles = JSON.stringify(op.fieldToggles);
+    return { method: 'GET', path: `/i/api/graphql/${op.qid}/${op.name || 'UserTweets'}`, query };
+  }
+
   // 从 X 的前端代码里找某个 GraphQL 操作的 queryId 和需要的 features 名单。
   function findOperation(jsText, name) {
     const re = new RegExp(`queryId:"([\\w-]+)",operationName:"${name}",operationType:"\\w+",metadata:\\{featureSwitches:\\[([^\\]]*)\\],fieldToggles:\\[([^\\]]*)\\]`);
@@ -260,6 +273,42 @@
     return out;
   }
 
+  // ---------- 最近发推时间 ----------
+
+  // 从某人的推文时间线里找出 TA 自己最近一次发帖（原创、回复、转推都算）的时间。
+  // 置顶推文也参与比较：取的是最大值，置顶的旧推不会让人看起来更活跃。
+  // 时间线里别人的推文（回复串里被回复的那条）不算。
+  // 返回 { state, lastAt, count }：
+  //   ok：找到了，lastAt 是毫秒时间戳；empty：时间线正常但看不到 TA 的推文；
+  //   unavailable：账号已停用、冻结或不存在；bad：返回的不是时间线（接口可能变了）。
+  function lastActivity(data, userId) {
+    const uid = String(userId);
+    const root = data && data.data && data.data.user && data.data.user.result;
+    if (root && /Unavailable|Suspended/.test(root.__typename || '')) return { state: 'unavailable', lastAt: 0, count: 0 };
+    if (data && data.data && data.data.user && !root && !hasTimeline(data)) return { state: 'unavailable', lastAt: 0, count: 0 };
+    if (!hasTimeline(data)) return { state: 'bad', lastAt: 0, count: 0 };
+    let lastAt = 0;
+    let count = 0;
+    (function walk(o, depth) {
+      if (!o || typeof o !== 'object' || depth > 60) return;
+      if (Array.isArray(o)) { for (const x of o) walk(x, depth + 1); return; }
+      if (o.tweet_results && o.tweet_results.result) {
+        let t = o.tweet_results.result;
+        if (t.__typename === 'TweetWithVisibilityResults') t = t.tweet;
+        const ur = t && t.core && t.core.user_results && t.core.user_results.result;
+        const author = (ur && ur.rest_id) || (t && t.legacy && t.legacy.user_id_str);
+        const at = t && t.legacy ? Date.parse(t.legacy.created_at) : NaN;
+        if (author && String(author) === uid && Number.isFinite(at)) {
+          count += 1;
+          if (at > lastAt) lastAt = at;
+        }
+        return;
+      }
+      for (const k of Object.keys(o)) walk(o[k], depth + 1);
+    })(data, 0);
+    return count ? { state: 'ok', lastAt, count } : { state: 'empty', lastAt: 0, count: 0 };
+  }
+
   // ---------- 结果判断 ----------
 
   function errorsOf(r) {
@@ -301,6 +350,6 @@
   root.XAPI = {
     WEB_BEARER, DEFAULT_FEATURES, friendshipRequest, settingsRequest, followingRequest, buildFeatures, findOperation, hasTimeline,
     fromGraphQLUser, parseGraphQLUsers, bottomCursor, classifyFriendship, apiUnavailable,
-    listTweetsRequest, fromGraphQLTweet, parseTweets, parseTrends,
+    listTweetsRequest, fromGraphQLTweet, parseTweets, parseTrends, userTweetsRequest, lastActivity,
   };
 })(typeof globalThis !== 'undefined' ? globalThis : self);

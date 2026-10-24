@@ -7,7 +7,7 @@
   const $ = (id) => document.getElementById(id);
   const PAGE = 100;
 
-  const data = { users: {}, whitelist: {}, queue: [], job: null, collect: null, me: null, owner: null, log: [], settings: S.mergeSettings() };
+  const data = { users: {}, whitelist: {}, queue: [], job: null, collect: null, activity: null, me: null, owner: null, log: [], settings: S.mergeSettings() };
   let cap = 100;
   let st = null; // 后台返回的整体状态（执行方式、预计完成时间等）
   let account = null; // 当前 x.com 登录的账号（只看已经打开的页面）
@@ -55,12 +55,13 @@
 
   // ---------- 数据加载与监听 ----------
   async function loadAll() {
-    const got = await chrome.storage.local.get(['users', 'whitelist', 'queue', 'job', 'collect', 'me', 'owner', 'log', 'settings']);
+    const got = await chrome.storage.local.get(['users', 'whitelist', 'queue', 'job', 'collect', 'activity', 'me', 'owner', 'log', 'settings']);
     data.users = got.users || {};
     data.whitelist = got.whitelist || {};
     data.queue = got.queue || [];
     data.job = got.job || null;
     data.collect = got.collect || null;
+    data.activity = got.activity || null;
     data.me = got.me || null;
     data.owner = got.owner || null;
     data.log = got.log || [];
@@ -109,7 +110,7 @@
       const has = (...keys) => keys.some((k) => pending.has(k));
       renderHeader();
       if (has('users', 'whitelist', 'settings', 'queue')) renderUsers();
-      if (has('collect')) renderCollect();
+      if (has('collect', 'activity', 'users', 'whitelist')) renderCollect();
       if (has('job', 'queue', 'settings', 'exec')) renderJob();
       if (has('log')) renderLog();
       pending.clear();
@@ -187,6 +188,9 @@
     if (q) list = list.filter((u) => `${u.name || ''} ${u.handle} ${u.bio || ''}`.toLowerCase().includes(q));
     if (tagOn.size) list = list.filter((u) => [...tagOn].every((t) => u.tags.includes(t)));
     if (kws.length) list = list.filter((u) => kws.some((k) => `${u.name || ''} ${u.bio || ''}`.toLowerCase().includes(k)));
+    const minDays = S.INACTIVE_PERIODS[$('inactive').value];
+    const now = Date.now();
+    if (minDays) list = list.filter((u) => { const d = S.inactiveDays(u, now); return d !== null && d >= minDays; });
     const num = (v, d) => (Number.isFinite(v) ? v : d);
     const sorters = {
       order: (a, b) => (a.seq || 1e9) - (b.seq || 1e9) || (a.firstSeen || 0) - (b.firstSeen || 0),
@@ -194,6 +198,7 @@
       followersAsc: (a, b) => num(a.followers, 1e12) - num(b.followers, 1e12),
       followersDesc: (a, b) => num(b.followers, -1) - num(a.followers, -1),
       tweetsAsc: (a, b) => num(a.tweets, 1e12) - num(b.tweets, 1e12),
+      inactiveDesc: (a, b) => num(S.inactiveDays(b, now), -1) - num(S.inactiveDays(a, now), -1),
     };
     list.sort(sorters[$('sort').value] || sorters.order);
     return list;
@@ -218,6 +223,8 @@
     $('enqueueBtn').textContent = `${data.settings.autoStart ? '加入队列并开始取关' : '加入取关队列'}（${selected.size}）`;
     $('pageInfo').textContent = `${page + 1} / ${pages}`;
     $('pageAll').checked = slice.length > 0 && slice.every((u) => selected.has(u.key));
+    renderInactiveBanner();
+    const now = Date.now();
     $('userRows').innerHTML = slice.map((u) => {
       const wl = !!data.whitelist[u.key];
       const avatar = u.avatar ? `<img src="${esc(u.avatar)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : '<img alt="">';
@@ -227,13 +234,14 @@
           <a href="https://x.com/${esc(u.handle)}" target="_blank" rel="noopener"><span class="nm">${esc(u.name || u.handle)}</span> <span class="muted">@${esc(u.handle)}</span></a>
           <div class="bio">${esc(u.bio || '')}</div></div></div></td>
         <td class="n">${fmtNum(u.followers)}</td><td class="n">${fmtNum(u.following)}</td><td class="n">${fmtNum(u.tweets)}</td>
+        <td class="act" title="${u.activity === 'ok' && u.lastTweetAt ? esc(`${u.activityApprox ? '最晚' : ''}${fmtTime(u.lastTweetAt)}${u.activityApprox ? ' 之后发过推（按推文数推断）' : ''}`) : ''}">${esc(S.activityText(u, now)) || '<span class="muted">—</span>'}</td>
         <td>${u.tags.map((t) => `<span class="chip ${t}">${esc(S.TAG_LABELS[t] || t)}</span>`).join('')}</td>
         <td><button class="star ${wl ? 'on' : ''}" title="白名单里的人永远不会被取关">${wl ? '★' : '☆'}</button></td></tr>`;
     }).join('');
   }
 
   ['q', 'fewN', 'kw'].forEach((id) => $(id).addEventListener('input', () => { page = 0; renderUsers(); }));
-  ['hideWl', 'sort'].forEach((id) => $(id).addEventListener('change', () => { page = 0; renderUsers(); }));
+  ['hideWl', 'sort', 'inactive'].forEach((id) => $(id).addEventListener('change', () => { page = 0; renderUsers(); }));
   $('prevPage').onclick = () => { if (page > 0) { page--; renderUsers(); } };
   $('nextPage').onclick = () => { page++; renderUsers(); };
 
@@ -273,9 +281,11 @@
   $('exportUsers').onclick = () => {
     const list = filteredUsers();
     if (!list.length) { alert('没有可导出的人。'); return; }
-    const head = ['用户名', '名字', 'ID', '粉丝', '关注', '推文', '回关', '标签', '白名单', '简介', '主页'];
+    const head = ['用户名', '名字', 'ID', '粉丝', '关注', '推文', '最近发推', '回关', '标签', '白名单', '简介', '主页'];
+    const now = Date.now();
     const rows = list.map((u) => [
       u.handle, u.name || '', u.id || '', u.followers ?? '', u.following ?? '', u.tweets ?? '',
+      u.activity === 'ok' && u.lastTweetAt ? new Date(u.lastTweetAt).toLocaleDateString() : S.activityText(u, now),
       u.followsYou === true ? '是' : u.followsYou === false ? '否' : '',
       u.tags.map((t) => S.TAG_LABELS[t] || t).join(' '), data.whitelist[u.key] ? '是' : '',
       (u.bio || '').replace(/\s+/g, ' '), `https://x.com/${u.handle}`,
@@ -317,6 +327,7 @@
   }
 
   function renderCollect() {
+    renderActivity();
     const c = data.collect;
     const running = c && c.status === 'running';
     $('collectBtn').disabled = !!running;
@@ -328,6 +339,57 @@
     $('collectMsg').textContent = `${c.message || ''}${local}${when}`;
   }
   $('collectBtn').onclick = () => act($('collectBtn'), () => send({ type: 'xa:collect' }));
+
+  // ---------- 多久没发推 ----------
+  function renderActivity() {
+    const a = data.activity;
+    const running = !!(a && a.status === 'running');
+    const collecting = !!(data.collect && data.collect.status === 'running');
+    $('activityBtn').disabled = running || collecting;
+    $('stopActivityBtn').hidden = !running;
+    const pendingN = uncheckedCount();
+    $('activityBtn').textContent = a && a.done && pendingN && !running ? `继续检查（还剩 ${pendingN} 人）` : '检查多久没发推';
+    let msg = '';
+    if (a) {
+      msg = a.message || '';
+      if (running && a.waitingUntil > Date.now() && !/自动继续|等关注/.test(msg)) msg += `，${new Date(a.waitingUntil).toLocaleTimeString()} 继续`;
+      if (a.status === 'done') {
+        // 查完了：顺便告诉你每档各有多少人，选好档位就能直接全选取关。
+        const now = Date.now();
+        const list = Object.values(data.users).filter((u) => !data.whitelist[u.key]);
+        const counts = Object.entries(S.INACTIVE_PERIODS).map(([k, d]) => `${S.INACTIVE_LABELS[k]}以上 ${list.filter((u) => { const x = S.inactiveDays(u, now); return x !== null && x >= d; }).length} 人`);
+        msg = `${msg}（${fmtTime(a.endedAt || a.startedAt)}）：没发推 ${counts.join('，')}`;
+      }
+    }
+    $('activityMsg').textContent = msg;
+    $('activityMsg').className = a && a.status === 'error' ? 'err-text' : 'muted';
+  }
+
+  // 还没检查（或结果过期）的人数，不算白名单。
+  function uncheckedCount() {
+    const now = Date.now();
+    return Object.values(data.users).filter((u) => !data.whitelist[u.key] && S.needsActivityCheck(u, now)).length;
+  }
+
+  // 选了「多久没发推」但还有人没检查：提示一下，筛选结果只包含查过的人。
+  function renderInactiveBanner() {
+    const on = !!$('inactive').value;
+    const n = on ? uncheckedCount() : 0;
+    const running = !!(data.activity && data.activity.status === 'running');
+    $('inactiveBanner').hidden = !n;
+    $('inactiveCheck').hidden = running;
+    $('inactiveText').textContent = n
+      ? `还有 ${n} 人没检查过最近发推时间（或者结果超过两周），下面只列出已经查过的人。${running ? '正在后台检查，结果会陆续出现。' : ''}`
+      : '';
+  }
+
+  const startActivity = (btn) => act(btn, async () => {
+    const r = await send({ type: 'xa:activityStart' });
+    if (r && r.error) throw new Error(r.error);
+  });
+  $('activityBtn').onclick = () => startActivity($('activityBtn'));
+  $('inactiveCheck').onclick = () => startActivity($('inactiveCheck'));
+  $('stopActivityBtn').onclick = () => act($('stopActivityBtn'), () => send({ type: 'xa:activityStop' }));
   $('stopCollectBtn').onclick = () => act($('stopCollectBtn'), () => send({ type: 'xa:stopCollect' }));
 
   // ---------- 取关任务 ----------

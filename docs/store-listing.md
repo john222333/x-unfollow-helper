@@ -30,11 +30,12 @@
 ### 详细说明（中文）
 
 ```
-整理你在 X（原 Twitter）上的关注列表：找出不回关、默认头像、零推文、疑似机器人的账号，选好后在后台按慢速、分批的节奏自动取关。
+整理你在 X（原 Twitter）上的关注列表：找出不回关、默认头像、零推文、疑似机器人、几个月没发推的账号，选好后在后台按慢速、分批的节奏自动取关。
 
 主要功能
 • 读取关注列表：在后台读取，不弹窗口，可以导出 CSV 备份
 • 标签筛选：不回关、默认头像、零推文、受保护、已认证、疑似机器人、粉丝少，加上关键词和粉丝数筛选
+• 多久没发推：后台检查每个人最近一次发帖的时间，按超过 1 个月、3 个月、半年、1 年筛选
 • 白名单：加入白名单的人永远不会被取关
 • 后台分批取关：随机间隔、分批休息、每天上限，加入队列后自动开始
 • 自动保护：X 提示操作频繁、登录失效、账号被锁或出现人机验证时立刻停下
@@ -62,6 +63,7 @@ Clean up who you follow on X (formerly Twitter). Find accounts that don't follow
 Features
 • Read your Following list in the background, no pop-up windows; export to CSV
 • Filter by tags (doesn't follow back, default avatar, no posts, protected, verified, likely bot, few followers), keywords and follower count
+• Inactive accounts: checks when each account you follow last posted, then filter by 1, 3, 6 or 12+ months
 • Whitelist accounts you never want to unfollow
 • Background batch unfollowing with random delays, rests between batches and a daily cap; starts automatically
 • Automatic safety stop when X reports rate limits, login problems, a locked account or a captcha
@@ -127,7 +129,7 @@ Helps users manage their own X (x.com) account: clean up their Following list (r
 
 建议勾选：
 
-- **网站内容（Website content）**：从 x.com 读取的关注列表（对方的公开资料），只保存在本地。
+- **网站内容（Website content）**：从 x.com 读取的关注列表（对方的公开资料），以及用户点「检查多久没发推」时每个关注对象最近一次发帖的时间，只保存在本地。
 - **个人身份信息（Personally identifiable information）**：用户自己的 x.com 用户名，用来核对账号，只保存在本地。
 - **身份验证信息（Authentication information）**：用户填写的模型 API key，只保存在本地，只发送给用户自己选的模型服务商。
 - 生成草稿时会把公开的话题资料发给用户自己选的模型服务商（用户主动点击才发送），在说明里如实写明。

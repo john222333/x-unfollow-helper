@@ -64,7 +64,7 @@
         status: res.status,
         json,
         text: json ? undefined : text.slice(0, 300),
-        rate: { remaining: res.headers.get('x-rate-limit-remaining'), reset: res.headers.get('x-rate-limit-reset') },
+        rate: { remaining: res.headers.get('x-rate-limit-remaining'), reset: res.headers.get('x-rate-limit-reset'), limit: res.headers.get('x-rate-limit-limit') },
       };
     } catch (e) {
       return { status: 0, error: `network: ${e.message}` };

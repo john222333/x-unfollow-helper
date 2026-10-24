@@ -88,3 +88,5 @@ table.grid { width: 100%; border-collapse: collapse; }
 .form > p { margin: -4px 0 0; }
 .checks { display: flex; flex-wrap: wrap; gap: 6px 18px; }
 .form label[hidden] { display: none; }
+.err-text { color: var(--bad, #e0245e); }
+.grid td.act { white-space: nowrap; font-size: 13px; }

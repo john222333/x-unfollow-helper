@@ -40,8 +40,18 @@
           <span class="muted" id="collectMsg"></span>
         </div>
         <p class="muted small">在后台读取，不会弹出窗口。你开着 x.com 时插件借用那个页面；没开时会在标签栏最左边放一个固定的小标签页，用完自动关掉。被 X 限制读取频率时会自动等待后接着读。</p>
+        <div class="row" style="margin-top:10px">
+          <button class="btn" id="activityBtn">检查多久没发推</button>
+          <button class="btn" id="stopActivityBtn" hidden>停止检查</button>
+          <span class="muted" id="activityMsg"></span>
+        </div>
+        <p class="muted small">逐个查看关注对象最近一次发帖（原创、回复、转推都算）的时间，查完就能在下面按「多久没发推」筛选。只读取不取关；按 X 给的额度自动放慢，人多时要几个小时，可以关掉这个页面，查到一半停下也会保存。白名单里的人不查。</p>
       </div>
 
+      <div class="banner" id="inactiveBanner" hidden>
+        <span id="inactiveText"></span>
+        <button class="btn small" id="inactiveCheck">现在检查</button>
+      </div>
       <div class="banner" id="failedBanner" hidden>
         <span id="failedText"></span>
         <button class="btn small" id="requeueFailed">重新加入取关队列</button>
@@ -52,6 +62,15 @@
           <div class="tagfilters" id="tagFilters"></div>
           <label>粉丝少于 <input type="number" id="fewN" value="50" min="0" style="width:72px"></label>
           <label>简介含关键词 <input type="text" id="kw" placeholder="逗号分隔" style="width:160px"></label>
+          <label>多久没发推
+            <select id="inactive">
+              <option value="">不限</option>
+              <option value="1m">超过 1 个月</option>
+              <option value="3m">超过 3 个月</option>
+              <option value="6m">超过半年</option>
+              <option value="1y">超过 1 年</option>
+            </select>
+          </label>
           <label><input type="checkbox" id="hideWl" checked> 隐藏白名单</label>
           <label>排序
             <select id="sort">
@@ -60,6 +79,7 @@
               <option value="followersAsc">粉丝数从少到多</option>
               <option value="followersDesc">粉丝数从多到少</option>
               <option value="tweetsAsc">推文数从少到多</option>
+              <option value="inactiveDesc">最久没发推的在前</option>
             </select>
           </label>
         </div>
@@ -74,7 +94,7 @@
           <button class="btn primary" id="enqueueBtn">加入取关队列</button>
         </div>
         <table class="grid">
-          <thead><tr><th style="width:28px"><input type="checkbox" id="pageAll"></th><th>账号</th><th class="n">粉丝</th><th class="n">关注</th><th class="n">推文</th><th>标签</th><th style="width:64px;white-space:nowrap">白名单</th></tr></thead>
+          <thead><tr><th style="width:28px"><input type="checkbox" id="pageAll"></th><th>账号</th><th class="n">粉丝</th><th class="n">关注</th><th class="n">推文</th><th style="white-space:nowrap">最近发推</th><th>标签</th><th style="width:64px;white-space:nowrap">白名单</th></tr></thead>
           <tbody id="userRows"></tbody>
         </table>
         <div class="row pager"><button class="btn" id="prevPage">上一页</button><span id="pageInfo" class="muted"></span><button class="btn" id="nextPage">下一页</button></div>

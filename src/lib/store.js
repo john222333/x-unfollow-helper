@@ -146,6 +146,51 @@
     fewFollowers: '粉丝少',
   };
 
+  // ---------- 多久没发推 ----------
+
+  const DAY_MS = 86400000;
+  // 筛选档位（天）。
+  const INACTIVE_PERIODS = { '1m': 30, '3m': 90, '6m': 180, '1y': 365 };
+  const INACTIVE_LABELS = { '1m': '1 个月', '3m': '3 个月', '6m': '半年', '1y': '1 年' };
+  // 检查结果多久之内算新鲜，不用重新检查。
+  const ACTIVITY_FRESH_DAYS = 14;
+
+  // 这个人有多少天没发推了。没检查过、看不到推文、账号不可用时返回 null（不确定的人不参与「不活跃」筛选）。
+  // 从没发过推的人按注册了多久算。
+  function inactiveDays(u, now) {
+    const t = now || Date.now();
+    if (!u) return null;
+    if (u.activity === 'ok' && u.lastTweetAt > 0) return Math.max(0, Math.floor((t - u.lastTweetAt) / DAY_MS));
+    if (u.tweets === 0 && u.activity !== 'ok') {
+      const c = Date.parse(u.createdAt);
+      return Number.isFinite(c) ? Math.max(0, Math.floor((t - c) / DAY_MS)) : null;
+    }
+    return null;
+  }
+
+  // 需不需要（重新）检查：从没检查过，或者结果已经超过两周（避免拿过期的结果去取关刚回来发推的人）。
+  function needsActivityCheck(u, now) {
+    if (!u || !u.id) return false;
+    if (u.tweets === 0) return false; // 推文数是 0，不用查
+    if (!u.activityAt) return true;
+    return (now || Date.now()) - u.activityAt > ACTIVITY_FRESH_DAYS * DAY_MS;
+  }
+
+  // 列表里显示的「最近发推」。
+  function activityText(u, now) {
+    if (!u) return '';
+    if (u.tweets === 0 && u.activity !== 'ok') return '从没发过';
+    if (u.activity === 'unavailable') return '账号不可用';
+    if (u.activity === 'empty') return '看不到推文';
+    const d = inactiveDays(u, now);
+    if (d === null) return '';
+    const approx = u.activityApprox ? '内' : '前';
+    if (d < 1) return u.activityApprox ? '最近' : '今天';
+    if (d < 30) return `${d} 天${approx}`;
+    if (d < 365) return `${Math.floor(d / 30)} 个月${approx}`;
+    return `${(d / 365).toFixed(d < 3650 ? 1 : 0).replace(/\.0$/, '')} 年${approx}`;
+  }
+
   // 找出「日志里最后一次操作是取关成功、但这次读取时 X 上仍在关注」的人。
   // log 是取关日志，users 是这次读取到的人，before 是读取开始的时间，since 之前的取关不算。返回 { key: 取关时间 }。
   function unfollowsNotApplied(log, users, before, since) {
@@ -163,6 +208,6 @@
 
   root.XAStore = {
     LIMITS, DEFAULT_SETTINGS, SETTINGS_VERSION, normalizePace, mergeSettings, effectiveDailyCap, estimateFinish, dayKey, userKey, tagsFor, TAG_LABELS,
-    unfollowsNotApplied,
+    unfollowsNotApplied, INACTIVE_PERIODS, INACTIVE_LABELS, ACTIVITY_FRESH_DAYS, inactiveDays, needsActivityCheck, activityText,
   };
 })(typeof globalThis !== 'undefined' ? globalThis : self);
