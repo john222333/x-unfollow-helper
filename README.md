@@ -29,7 +29,7 @@
 
 ### 从源码安装（开发者模式）
 
-1. 下载本仓库（或 Releases 里的 zip）并解压。
+1. 下载 [Releases](https://github.com/john222333/x-unfollow-helper/releases) 里最新的 zip 并解压（或者 `git clone https://github.com/john222333/x-unfollow-helper`）。
 2. Chrome 地址栏打开 `chrome://extensions`，打开右上角的 **开发者模式**。
 3. 点 **加载已解压的扩展程序**，选择能看到 `manifest.json` 的那一层文件夹。
 4. 点浏览器右上角的拼图图标，把「X 取关助手」固定到工具栏。安装后会自动打开管理页。

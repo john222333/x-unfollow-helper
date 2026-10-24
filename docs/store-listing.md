@@ -136,7 +136,7 @@ Helps users manage their own X (x.com) account: clean up their Following list (r
 
 然后勾选三项承诺：不出售或转让给第三方；不用于与单一用途无关的目的；不用于判断信用或放贷。
 
-**隐私政策网址**：仓库建好后填 `https://github.com/<用户名>/<仓库名>/blob/main/PRIVACY.md`。
+**隐私政策网址**：`https://github.com/john222333/x-unfollow-helper/blob/main/PRIVACY.md`。
 
 ## 分发
 
