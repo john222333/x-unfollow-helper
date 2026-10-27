@@ -105,13 +105,15 @@
     // 某人主页上页面自己加载的资料和推文（插件检查「多久没发推」时打开的主页，或者你自己点开的）。
     if (/^(UserTweets|UserTweetsAndReplies|UserByScreenName)$/.test(ev.data.op) && alive()) {
       const v = ev.data.vars || {};
-      const base = { type: 'xa:profileSeen', op: ev.data.op, status: ev.data.status, me: loggedInUserId() };
+      // 当前打开的是谁的主页（/用户名 或 /用户名/with_replies）：关注列表里没有账号 ID 时按用户名对上。
+      const page = (/^\/([A-Za-z0-9_]{1,15})(\/with_replies)?\/?$/.exec(location.pathname) || [])[1] || '';
+      const base = { type: 'xa:profileSeen', op: ev.data.op, status: ev.data.status, me: loggedInUserId(), page: page.toLowerCase() };
       if (ev.data.op === 'UserByScreenName') {
         const p = ev.data.data ? XAPI.profileUser(ev.data.data) : { unavailable: false, userId: null };
         send({ ...base, handle: String(v.screen_name || '').toLowerCase(), ...p }).catch(() => {});
       } else if (v.userId) {
         // 往下翻加载的后几页是更早的推文，只看第一页。
-        const res = ev.data.data ? XAPI.lastActivity(ev.data.data, v.userId) : null;
+        const res = ev.data.data ? XAPI.lastActivity(ev.data.data, v.userId, page) : null;
         send({ ...base, userId: String(v.userId), first: !v.cursor, res }).catch(() => {});
       }
     }
@@ -216,6 +218,26 @@
     }
   }
 
+  async function profileTimes(handle) {
+    const articles = () => Array.from(document.querySelectorAll('article'));
+    const ok = await D.waitFor(() => articles().length || D.profileGone() || document.querySelector('[data-testid="emptyState"]'), 8000);
+    if (!ok) return null;
+    if (D.profileGone()) return { state: 'unavailable', lastAt: 0, count: 0, via: 'dom' };
+    let lastAt = 0;
+    let count = 0;
+    for (const a of document.querySelectorAll('article a[href*="/status/"] time[datetime]')) {
+      const link = a.closest('a');
+      const m = /^\/([A-Za-z0-9_]{1,15})\/status\//.exec((link && link.getAttribute('href')) || '');
+      if (!m || m[1].toLowerCase() !== handle) continue;
+      const at = Date.parse(a.getAttribute('datetime'));
+      if (!Number.isFinite(at)) continue;
+      count += 1;
+      if (at > lastAt) lastAt = at;
+    }
+    if (count) return { state: 'ok', lastAt, count, via: 'dom' };
+    return articles().length ? null : { state: 'empty', lastAt: 0, count: 0, via: 'dom' };
+  }
+
   // ---------- 后台指令 ----------
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (!msg || !msg.type) return false;
@@ -229,6 +251,11 @@
     }
     if (msg.type === 'xa:api') {
       apiFetch(msg.req || {}).then(sendResponse);
+      return true;
+    }
+    // 兜底：没旁听到主页数据时，直接看页面上显示的推文时间（只算这个人自己发的，转推里别人的原推不算）。
+    if (msg.type === 'xa:profileTimes') {
+      profileTimes(String(msg.handle || '').toLowerCase()).then(sendResponse, () => sendResponse(null));
       return true;
     }
     if (msg.type === 'xa:whoami') {

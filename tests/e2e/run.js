@@ -345,6 +345,9 @@ const errors = [];
   await home5.goto('https://x.com/home');
   await until(async () => { const us = await get('users'); return us.user5 && us.user5.activity === 'ok'; }, 15000, '首页刷到的帖子记下发帖时间');
   await home5.close();
+  // user2、user3 的主页旁听不到数据（只能看页面上的推文）；user4 在关注列表里没有账号 ID（比如是从页面上读到的）。
+  mock.state.domOnly = new Set(['user2', 'user3']);
+  await opts.evaluate(() => chrome.storage.local.get('users').then(({ users }) => { delete users.user4.id; return chrome.storage.local.set({ users }); }));
   await opts.selectOption('#inactive', '6m');
   const hint = await until(async () => (await opts.isVisible('#inactiveBanner')) && await opts.textContent('#inactiveText'), 5000, '没检查过的提示');
   console.log('  ', hint);
@@ -354,6 +357,7 @@ const errors = [];
   console.log('  结果', act.status, act.message, `检查 ${act.done} 人，主页时间线 ${mock.state.calls.profileTimelines} 次，插件直接调用被拒 ${mock.state.calls.userTweets404} 次`);
   if (mock.state.calls.userTweets404) throw new Error('插件不应该自己调用推文接口');
   if (act.status !== 'done') throw new Error(`检查应该完成：${JSON.stringify(act)}`);
+  if (uAct.user4.id !== '1004') throw new Error('没有账号 ID 的人应该按用户名对上，并补上 ID');
   const wl = (await get('whitelist')) || {};
   for (const u of Object.values(uAct)) {
     if (wl[u.key]) continue;

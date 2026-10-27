@@ -103,6 +103,27 @@
 
   // ---------- 解析用户 ----------
 
+  // 在用户对象里找某个字段（X 有时会把字段从 legacy 挪到别的子对象里）。不进入别的用户或推文对象。
+  function deepPick(o, key, depth) {
+    if (!o || typeof o !== 'object' || (depth || 0) > 3) return undefined;
+    if (o[key] !== undefined && o[key] !== null) return o[key];
+    for (const [k, v] of Object.entries(o)) {
+      if (!v || typeof v !== 'object' || Array.isArray(v) || /_results?$|^timeline$/.test(k)) continue;
+      const got = deepPick(v, key, (depth || 0) + 1);
+      if (got !== undefined) return got;
+    }
+    return undefined;
+  }
+
+  // 账号 ID：rest_id，没有时从 id（base64 的「User:123」）里解出来。
+  function userIdOf(o) {
+    if (o.rest_id) return String(o.rest_id);
+    try {
+      const m = /^User:(\d+)$/.exec(atob(String(o.id || '')));
+      return m ? m[1] : null;
+    } catch { return null; }
+  }
+
   function fromGraphQLUser(o) {
     const L = o.legacy || {};
     const C = o.core || {};
@@ -112,15 +133,15 @@
     const avatar = (o.avatar && o.avatar.image_url) || L.profile_image_url_https;
     const pick = (...vals) => vals.find((v) => v !== undefined && v !== null);
     return {
-      id: String(o.rest_id),
+      id: userIdOf(o) || undefined,
       handle,
       name: pick(C.name, L.name),
       bio: pick(o.profile_bio && o.profile_bio.description, L.description),
       avatar,
       defaultAvatar: pick(L.default_profile_image, avatar ? /default_profile/.test(avatar) : undefined),
-      followers: pick(L.followers_count),
-      following: pick(L.friends_count),
-      tweets: pick(L.statuses_count),
+      followers: pick(L.followers_count, deepPick(o, 'followers_count')),
+      following: pick(L.friends_count, deepPick(o, 'friends_count')),
+      tweets: pick(L.statuses_count, deepPick(o, 'statuses_count')),
       followsYou: pick(R.followed_by, L.followed_by),
       youFollow: pick(R.following, L.following),
       verified: !!(o.is_blue_verified || (o.verification && o.verification.verified) || L.verified) || undefined,
@@ -141,7 +162,7 @@
         return;
       }
       // 带 timeline 的 User 是「你自己」这个外层容器，关注的人在它里面，要继续往下找。
-      if (o.__typename === 'User' && o.rest_id && !o.timeline) {
+      if (o.__typename === 'User' && userIdOf(o) && !o.timeline) {
         const u = fromGraphQLUser(o);
         if (u && !seen.has(u.handle.toLowerCase())) {
           seen.add(u.handle.toLowerCase());
@@ -268,8 +289,9 @@
   // 返回 { state, lastAt, count }：
   //   ok：找到了，lastAt 是毫秒时间戳；empty：时间线正常但看不到 TA 的推文；
   //   unavailable：账号已停用、冻结或不存在；bad：返回的不是时间线（接口可能变了）。
-  function lastActivity(data, userId) {
-    const uid = String(userId);
+  function lastActivity(data, userId, handle) {
+    const uid = String(userId || '');
+    const hd = String(handle || '').toLowerCase();
     const root = data && data.data && data.data.user && data.data.user.result;
     if (root && /Unavailable|Suspended/.test(root.__typename || '')) return { state: 'unavailable', lastAt: 0, count: 0 };
     if (data && data.data && data.data.user && !root && !hasTimeline(data)) return { state: 'unavailable', lastAt: 0, count: 0 };
@@ -284,8 +306,10 @@
         if (t.__typename === 'TweetWithVisibilityResults') t = t.tweet;
         const ur = t && t.core && t.core.user_results && t.core.user_results.result;
         const author = (ur && ur.rest_id) || (t && t.legacy && t.legacy.user_id_str);
+        const sn = ur && ((ur.core && ur.core.screen_name) || (ur.legacy && ur.legacy.screen_name));
         const at = t && t.legacy ? Date.parse(t.legacy.created_at) : NaN;
-        if (author && String(author) === uid && Number.isFinite(at)) {
+        const isOwner = (uid && author && String(author) === uid) || (hd && sn && String(sn).toLowerCase() === hd);
+        if (isOwner && Number.isFinite(at)) {
           count += 1;
           if (at > lastAt) lastAt = at;
         }
@@ -320,7 +344,7 @@
   function profileUser(data) {
     const r = data && data.data && data.data.user && data.data.user.result;
     if (!r || /Unavailable|Suspended/.test(r.__typename || '')) return { unavailable: true, userId: null };
-    return { unavailable: false, userId: r.rest_id ? String(r.rest_id) : null };
+    return { unavailable: false, userId: userIdOf(r) };
   }
 
   // ---------- 结果判断 ----------

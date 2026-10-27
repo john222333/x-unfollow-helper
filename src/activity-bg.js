@@ -104,9 +104,12 @@
 
   // 在后台标签页里打开某人的主页，等页面自己加载出资料和推文。
   // 先开「回复」页（回复也算发帖），没等到数据再开普通主页。
-  // 返回 { state, lastAt } | { rate: true } | { wrongAccount: true } | null（没拿到数据）
+  // 页面数据没旁听到时，直接看页面上显示的推文时间。
+  // 返回 { state, lastAt, userId? } | { rate: true } | { wrongAccount: true } | { fail: 原因 }
   async function visit(u) {
-    const keys = [String(u.id), `@${String(u.handle).toLowerCase()}`];
+    const handle = String(u.handle).toLowerCase();
+    const keys = [u.id ? String(u.id) : null, `@${handle}`].filter(Boolean);
+    let why = '页面没有加载出数据';
     for (const path of [`${u.handle}/with_replies`, u.handle]) {
       let resolve;
       const got = new Promise((r) => { resolve = r; });
@@ -114,18 +117,30 @@
       let timer = null;
       visiting = true;
       try {
-        await openInWorker(`https://x.com/${path}`).catch(() => {});
+        let tabId = null;
+        try {
+          tabId = await openInWorker(`https://x.com/${path}`);
+        } catch (e) {
+          why = `主页打开超时（${e.message}）`;
+        }
         timer = setTimeout(() => resolve(null), pace().loadWait);
         const r = await got;
         if (r) return r;
+        if (tabId) {
+          const dom = await sendToTab(tabId, { type: 'xa:profileTimes', handle }, 15000).catch(() => null);
+          if (dom && dom.state) return dom;
+          const info = await sendToTab(tabId, { type: 'xa:pageInfo' }, 5000).catch(() => null);
+          if (info && info.loggedOut) return { fail: 'x.com 没有登录' };
+          why = info ? `主页上没找到 @${u.handle} 的推文` : '插件没能连上这个页面';
+        }
       } finally {
         clearTimeout(timer);
-        keys.forEach((k) => { if (waiters.get(k) === resolve) waiters.delete(k); });
+        for (const [k, v] of waiters) if (v === resolve) waiters.delete(k);
         visiting = false;
       }
       await sleep(rand(...pace().gap) / 3);
     }
-    return null;
+    return { fail: why };
   }
 
   // 后台取关正在处理一批时不检查：两边会抢同一个后台标签页。批次之间休息时照常检查。
@@ -156,6 +171,7 @@
       }
 
       let fails = 0;
+      let lastFail = '';
       let emptyRun = []; // 连续「看不到推文」的人
       const skip = new Set(); // 这一轮里一直拿不到数据的人，先跳过
       const tries = {};
@@ -210,10 +226,11 @@
         }
         if (!r || !r.state || r.state === 'bad') {
           fails += 1;
+          lastFail = `@${u.handle}：${(r && r.fail) || '数据格式不对'}`;
           tries[u.key] = (tries[u.key] || 0) + 1;
           if (tries[u.key] >= 2) skip.add(u.key);
           if (fails >= FAIL_STOP) {
-            throw new Error(`连续 ${fails} 个主页都没加载出推文，已停止，已检查的结果都保存了。请确认 x.com 能正常打开，稍后再点「检查」接着查。`);
+            throw new Error(`连续 ${fails} 个主页都没读到推文（最后一个 ${lastFail}），已停止，已检查的结果都保存了。请确认 x.com 能正常打开，稍后再点「检查」接着查。`);
           }
           await sleep(rand(...P.gap));
           continue;
@@ -221,6 +238,7 @@
         fails = 0;
         const at = Date.now();
         buffer[u.key] = { activity: r.state, lastTweetAt: r.lastAt || 0, activityAt: at, activityApprox: false };
+        if (!u.id && r.userId) buffer[u.key].id = String(r.userId);
         if (r.state === 'empty' && u.tweets > 0) {
           emptyRun.push(u.key);
           if (emptyRun.length >= EMPTY_STOP) {
@@ -266,21 +284,23 @@
       if (mine) w(mine);
       else if (msg.status === 429) w({ rate: true });
       else if (msg.unavailable) w({ state: 'unavailable', lastAt: 0 });
+      // 顺便记下账号 ID：等会儿的推文时间线按 ID 对上（关注列表里没有 ID 的人也能对上）。
+      else if (msg.userId && !waiters.has(String(msg.userId))) waiters.set(String(msg.userId), w);
       return { ok: true };
     }
-    const w = waiters.get(String(msg.userId));
+    const w = waiters.get(String(msg.userId)) || (msg.page ? waiters.get(`@${msg.page}`) : null);
     if (w) {
       if (mine) w(mine);
       else if (msg.status === 429) w({ rate: true });
-      else if (msg.first && msg.res) w(msg.res);
+      else if (msg.first && msg.res && msg.res.state !== 'bad') w({ ...msg.res, userId: msg.userId });
       return { ok: true };
     }
     if (mine || !msg.first || !msg.res || msg.res.state !== 'ok') return { ok: true };
     await withLock(async () => {
       const { users } = await store.get('users');
-      const u = users && Object.values(users).find((x) => x.id === String(msg.userId));
+      const u = users && (Object.values(users).find((x) => x.id === String(msg.userId)) || (msg.page && users[msg.page]));
       if (!u) return;
-      users[u.key] = { ...u, activity: 'ok', lastTweetAt: msg.res.lastAt, activityAt: Date.now(), activityApprox: false };
+      users[u.key] = { ...u, id: u.id || String(msg.userId), activity: 'ok', lastTweetAt: msg.res.lastAt, activityAt: Date.now(), activityApprox: false };
       await store.set({ users });
     });
     return { ok: true };

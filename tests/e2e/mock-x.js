@@ -27,6 +27,7 @@ const state = {
   rateLimitOnce: false, // 下一次读取第二页时返回一次 429
   ignoreUnfollow: false, // 取关接口返回成功，但实际没有取关（模拟 X 悄悄不执行）
   partialPages: 0, // 接下来几次读取后续页时返回「部分出错」的空数据（模拟 X 中途超时）
+  domOnly: new Set(), // 这些人的主页不请求推文接口，只把推文显示在页面上（模拟旁听不到数据）
   calls: { destroy: 0, create: 0, following: 0, settings: 0, list: 0, userTweets: 0, userTweets404: 0, profileTimelines: 0 },
 };
 
@@ -38,6 +39,7 @@ function reset() {
   state.rateLimitOnce = false;
   state.ignoreUnfollow = false;
   state.partialPages = 0;
+  state.domOnly = new Set();
   state.calls = { destroy: 0, create: 0, following: 0, settings: 0, list: 0, userTweets: 0, userTweets404: 0, profileTimelines: 0 };
 }
 
@@ -192,9 +194,19 @@ function profileData(handle, replies) {
     .then(r => r.json()).then(d => {
       const u = d.data && d.data.user && d.data.user.result;
       if (!u || u.__typename !== 'User') return;
+      if (${state.domOnly.has(handle)}) return;
       const op = ${replies ? "'utr/UserTweetsAndReplies'" : "'ut/UserTweets'"};
       fetch('/i/api/graphql/' + op + '?variables=' + encodeURIComponent(JSON.stringify({ userId: u.rest_id, count: 20 })), { headers: { 'x-client-transaction-id': 'page' } });
     });`;
+}
+
+// 页面上显示的推文：TA 自己的两条，加一条 TA 转推的别人昨天的推文（时间是原推的，不能算 TA 的）。
+function articlesHtml(u) {
+  if (u.handle === 'user13') return '';
+  const iso = (days) => new Date(Date.now() - days * 86400000).toISOString();
+  const art = (who, id, days) => `<article data-testid="tweet"><a href="/${who}/status/${id}"><time datetime="${iso(days)}">t</time></a></article>`;
+  const d = lastDays(u);
+  return art('someone', `r${u.id}`, 1) + art(u.handle, `a${u.id}`, d) + art(u.handle, `b${u.id}`, d + 30);
 }
 
 function profileHtml(handle, replies) {
@@ -203,7 +215,7 @@ function profileHtml(handle, replies) {
   const limited = handle === 'user29';
   const on = state.following.has(u.id);
   return page(`<div data-testid="placementTracking"><button id="fb" data-testid="${u.id}-${on ? 'unfollow' : 'follow'}">${on ? 'Following' : 'Follow'}</button></div>
-    <div data-testid="UserName">${u.name}</div>`, `${profileData(handle, replies)}
+    <div data-testid="UserName">${u.name}</div>${articlesHtml(u)}`, `${profileData(handle, replies)}
     const b = document.getElementById('fb');
     const set = (v) => fetch('/__mock/follow?id=${u.id}&on=' + v).then(() => {
       b.dataset.testid = '${u.id}-' + (v ? 'unfollow' : 'follow'); b.textContent = v ? 'Following' : 'Follow';

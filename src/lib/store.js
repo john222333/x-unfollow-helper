@@ -170,7 +170,7 @@
 
   // 需不需要（重新）检查：从没检查过，或者结果已经超过两周（避免拿过期的结果去取关刚回来发推的人）。
   function needsActivityCheck(u, now) {
-    if (!u || !u.id) return false;
+    if (!u || !u.handle) return false;
     if (u.tweets === 0) return false; // 推文数是 0，不用查
     if (!u.activityAt) return true;
     return (now || Date.now()) - u.activityAt > ACTIVITY_FRESH_DAYS * DAY_MS;

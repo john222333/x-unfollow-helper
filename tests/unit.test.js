@@ -436,20 +436,29 @@ test('刷到的帖子只会让人显得更活跃', () => {
 test('多久没发推：天数、显示文字、要不要重新检查', () => {
   const now = Date.parse('2026-10-24T00:00:00Z');
   const day = 86400000;
-  const u = { id: '1', activity: 'ok', lastTweetAt: now - 200 * day, activityAt: now - day, tweets: 10 };
+  const u = { id: '1', handle: 'a', activity: 'ok', lastTweetAt: now - 200 * day, activityAt: now - day, tweets: 10 };
   assert.strictEqual(XAStore.inactiveDays(u, now), 200);
   assert.strictEqual(XAStore.activityText(u, now), '6 个月前');
   assert.strictEqual(XAStore.needsActivityCheck(u, now), false);
   assert.strictEqual(XAStore.needsActivityCheck({ ...u, activityAt: now - 20 * day }, now), true);
-  assert.strictEqual(XAStore.needsActivityCheck({ id: '1', tweets: 5 }, now), true);
+  assert.strictEqual(XAStore.needsActivityCheck({ handle: 'a', tweets: 5 }, now), true);
   // 没检查过、看不到推文的人不算「不活跃」，避免误取关。
   assert.strictEqual(XAStore.inactiveDays({ id: '1', tweets: 5 }, now), null);
   assert.strictEqual(XAStore.inactiveDays({ id: '1', tweets: 5, activity: 'empty', activityAt: now }, now), null);
   // 推文数为 0：不用查，按注册了多久算。
-  const never = { id: '2', tweets: 0, createdAt: 'Mon Jan 01 00:00:00 +0000 2024' };
+  const never = { id: '2', handle: 'b', tweets: 0, createdAt: 'Mon Jan 01 00:00:00 +0000 2024' };
   assert.strictEqual(XAStore.needsActivityCheck(never, now), false);
   assert.ok(XAStore.inactiveDays(never, now) > 365);
   assert.strictEqual(XAStore.activityText(never, now), '从没发过');
   assert.strictEqual(XAStore.activityText({ ...u, lastTweetAt: now - 400 * day }, now), '1.1 年前');
   assert.strictEqual(XAStore.activityText({ ...u, lastTweetAt: now - 3 * day, activityApprox: true }, now), '3 天内');
+});
+
+test('关注列表里没有账号 ID 时按用户名认出主页主人；用户字段挪了位置也能读到', () => {
+  const data = userTweetsPage([['1', '42', 'Mon Mar 02 10:00:00 +0000 2026']]);
+  data.data.user.result.timeline.timeline.instructions[0].entries[0].content.itemContent.tweet_results.result.core.user_results.result.core = { screen_name: 'Alice' };
+  assert.strictEqual(XAPI.lastActivity(data, null, 'alice').state, 'ok');
+  assert.strictEqual(XAPI.lastActivity(data, null, 'bob').state, 'empty');
+  const u = XAPI.fromGraphQLUser({ __typename: 'User', id: Buffer.from('User:42').toString('base64'), core: { screen_name: 'a' }, counts: { followers_count: 5, friends_count: 6, statuses_count: 7 } });
+  assert.deepStrictEqual([u.id, u.followers, u.following, u.tweets], ['42', 5, 6, 7]);
 });

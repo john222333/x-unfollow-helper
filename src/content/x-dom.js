@@ -235,6 +235,6 @@
 
   root.XADom = {
     sleep, rand, waitFor, act, whoami, currentHandle, loggedOut, visibleUsers, parseGraphQLUsers: root.XAPI.parseGraphQLUsers, detectBlocker,
-    nearBottom, loadingMore, loadError, primaryColumn,
+    nearBottom, loadingMore, loadError, primaryColumn, profileGone,
   };
 })(typeof globalThis !== 'undefined' ? globalThis : self);
