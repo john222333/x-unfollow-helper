@@ -408,11 +408,29 @@ test('最近发推时间：看不到推文、账号不可用、返回不是时�
   assert.strictEqual(XAPI.lastActivity({ errors: [{ message: 'x' }] }, '42').state, 'bad');
 });
 
-test('请求：优先带回复的时间线', () => {
-  const r = XAPI.userTweetsRequest({ qid: 'q1', name: 'UserTweetsAndReplies', featureNames: ['a'] }, 42);
-  assert.strictEqual(r.path, '/i/api/graphql/q1/UserTweetsAndReplies');
-  assert.strictEqual(JSON.parse(r.query.variables).userId, '42');
-  assert.strictEqual(XAPI.userTweetsRequest({ qid: 'q2', name: 'UserTweets' }, 1).path, '/i/api/graphql/q2/UserTweets');
+test('时间线里每个作者最近一次发帖的时间；主页资料判断账号还在不在', () => {
+  const data = userTweetsPage([
+    ['1', '42', 'Mon Mar 02 10:00:00 +0000 2026'],
+    ['2', '77', 'Mon Oct 19 10:00:00 +0000 2026'],
+    ['3', '42', 'Sun Feb 01 10:00:00 +0000 2026'],
+  ]);
+  assert.deepStrictEqual(XAPI.postTimes(data), { 42: Date.parse('Mon Mar 02 10:00:00 +0000 2026'), 77: Date.parse('Mon Oct 19 10:00:00 +0000 2026') });
+  assert.deepStrictEqual(XAPI.profileUser({ data: { user: { result: { __typename: 'User', rest_id: '42' } } } }), { unavailable: false, userId: '42' });
+  assert.strictEqual(XAPI.profileUser({ data: { user: { result: { __typename: 'UserUnavailable' } } } }).unavailable, true);
+  assert.strictEqual(XAPI.profileUser({ data: {} }).unavailable, true);
+});
+
+test('刷到的帖子只会让人显得更活跃', () => {
+  const now = Date.parse('2026-10-24T00:00:00Z');
+  const day = 86400000;
+  // 没查过的人：一个月内发过 → 直接算查过；更早的帖子不能说明 TA 之后没发过，不记。
+  assert.deepStrictEqual(XAStore.seenPostPatch({ id: '1' }, now - 3 * day, now), { activity: 'ok', lastTweetAt: now - 3 * day, activityAt: now, activityApprox: false });
+  assert.strictEqual(XAStore.seenPostPatch({ id: '1' }, now - 90 * day, now), null);
+  // 查过的人：比记录的新才更新；比记录的旧不动。
+  const checked = { id: '1', activity: 'ok', lastTweetAt: now - 200 * day, activityAt: now - day };
+  assert.deepStrictEqual(XAStore.seenPostPatch(checked, now - 100 * day, now), { lastTweetAt: now - 100 * day, activityApprox: false });
+  assert.strictEqual(XAStore.seenPostPatch(checked, now - 300 * day, now), null);
+  assert.strictEqual(XAStore.seenPostPatch(checked, NaN, now), null);
 });
 
 test('多久没发推：天数、显示文字、要不要重新检查', () => {

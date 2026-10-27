@@ -239,6 +239,9 @@ async function closeWorkerIfIdle() {
   const collect = await getCollect();
   const busy = job.status === 'running' && (job.current || job.batch.length);
   if (busy || (collect && collect.status === 'running' && !collect.waitingUntil)) return;
+  // 正在检查「多久没发推」（不在休息）：它要接着用这个标签页开下一个主页。
+  const { activity } = await store.get('activity');
+  if (activity && activity.status === 'running' && !(activity.waitingUntil > Date.now())) return;
   await closeWorker();
 }
 
@@ -983,6 +986,8 @@ async function tick() {
 }
 
 async function step() {
+  // 「多久没发推」正在后台标签页里打开某个主页：等它读完再取关，免得两边抢同一个标签页。
+  if (self.XAActivityBG && self.XAActivityBG.busy()) return;
   // 读取关注列表期间不取关：读到一半时取关的人会被读回列表里。
   const collect = await getCollect();
   if (collect && collect.status === 'running') return;
@@ -1292,7 +1297,7 @@ async function handle(msg, sender) {
       if (typeof m.bearer === 'string' && m.bearer.length > 20) patch.bearer = m.bearer;
       if (m.gql && m.gql.name && m.gql.qid) {
         if (m.gql.features && typeof m.gql.features === 'object') patch.features = m.gql.features;
-        if (['Following', 'ListLatestTweetsTimeline', 'UserTweets', 'UserTweetsAndReplies'].includes(m.gql.name)) {
+        if (m.gql.name === 'Following' || m.gql.name === 'ListLatestTweetsTimeline') {
           const prev = (await getXmeta()).ops[m.gql.name] || {};
           patch.ops = {
             [m.gql.name]: {
@@ -1421,6 +1426,8 @@ async function handle(msg, sender) {
       return self.XATrendsBG.handle(msg);
     case 'xa:activityStart':
     case 'xa:activityStop':
+    case 'xa:profileSeen':
+    case 'xa:seenPosts':
       return self.XAActivityBG.handle(msg);
     default:
       return { error: `unknown message ${msg && msg.type}` };
@@ -1460,7 +1467,10 @@ async function onWorkerClosed(match) {
     await saveJob(job);
     await updateBadge();
   }
-  const { collect } = await store.get('collect');
+  const { collect, activity } = await store.get(['collect', 'activity']);
+  if (activity && activity.status === 'running' && !(activity.waitingUntil > Date.now()) && self.XAActivityBG) {
+    await self.XAActivityBG.stop('插件的后台标签页被关闭，检查已停止，结果已保存。点「检查多久没发推」可以接着查。');
+  }
   if (collect && collect.status === 'running' && collect.mode === 'window') {
     await store.set({ collect: { ...collect, status: 'stopped', message: '读取窗口被关闭' } });
   }

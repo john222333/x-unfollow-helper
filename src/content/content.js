@@ -97,6 +97,24 @@
       const tweets = XAPI.parseTweets(ev.data.data);
       if (tweets.length) send({ type: 'xa:tweets', op: ev.data.op, listId: ev.data.listId || null, tweets }).catch(() => {});
     }
+    // 首页、列表里刷到的帖子：顺带记下作者最近一次发帖的时间，检查「多久没发推」时就不用再开 TA 的主页。
+    if (/^(HomeTimeline|HomeLatestTimeline|ListLatestTweetsTimeline)$/.test(ev.data.op) && alive()) {
+      const times = XAPI.postTimes(ev.data.data);
+      if (Object.keys(times).length) send({ type: 'xa:seenPosts', times }).catch(() => {});
+    }
+    // 某人主页上页面自己加载的资料和推文（插件检查「多久没发推」时打开的主页，或者你自己点开的）。
+    if (/^(UserTweets|UserTweetsAndReplies|UserByScreenName)$/.test(ev.data.op) && alive()) {
+      const v = ev.data.vars || {};
+      const base = { type: 'xa:profileSeen', op: ev.data.op, status: ev.data.status, me: loggedInUserId() };
+      if (ev.data.op === 'UserByScreenName') {
+        const p = ev.data.data ? XAPI.profileUser(ev.data.data) : { unavailable: false, userId: null };
+        send({ ...base, handle: String(v.screen_name || '').toLowerCase(), ...p }).catch(() => {});
+      } else if (v.userId) {
+        // 往下翻加载的后几页是更早的推文，只看第一页。
+        const res = ev.data.data ? XAPI.lastActivity(ev.data.data, v.userId) : null;
+        send({ ...base, userId: String(v.userId), first: !v.cursor, res }).catch(() => {});
+      }
+    }
     if (/^(ExploreSidebar|ExplorePage|GenericTimelineById)$/.test(ev.data.op) && alive()) {
       const trends = XAPI.parseTrends(ev.data.data);
       if (trends.length) send({ type: 'xa:xtrends', trends }).catch(() => {});

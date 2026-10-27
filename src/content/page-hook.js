@@ -7,7 +7,9 @@
 
   // 首页和列表的推文用于热点功能：你平时刷到的 AI / Web3 推文也会算进热度里。
   // 趋势榜（ExploreSidebar 是首页右侧的「有什么新鲜事」）是 X 全站的统计，用来让热点更客观。
-  const WATCH = /\/graphql\/[^/]+\/(Following|HomeTimeline|HomeLatestTimeline|ListLatestTweetsTimeline|ExploreSidebar|ExplorePage|GenericTimelineById)\b/;
+  // 打开某人主页时页面自己加载的资料和推文（UserByScreenName、UserTweets…）用来判断 TA 多久没发推。
+  const WATCH = /\/graphql\/[^/]+\/(Following|HomeTimeline|HomeLatestTimeline|ListLatestTweetsTimeline|ExploreSidebar|ExplorePage|GenericTimelineById|UserTweets|UserTweetsAndReplies|UserByScreenName)\b/;
+  const PROFILE_OPS = /^(UserTweets|UserTweetsAndReplies|UserByScreenName)$/;
 
   // 插件的内容脚本比这里晚加载，先到的数据缓存几份，等它来要时再发一遍。
   const buffer = [];
@@ -16,11 +18,17 @@
     window.postMessage(msg, window.location.origin);
   }
 
-  function forward(url, text) {
+  function forward(url, text, status) {
     const m = WATCH.exec(url);
     if (!m) return;
+    // 主页数据被 X 限制频率时也要告诉插件，让它停下来等。
+    if (status === 429 && PROFILE_OPS.test(m[1])) {
+      post({ source: 'xa-hook', op: m[1], status, data: null, vars: varsOf(url) });
+      return;
+    }
     try {
-      const msg = { source: 'xa-hook', op: m[1], data: JSON.parse(text) };
+      const msg = { source: 'xa-hook', op: m[1], status: status || 200, data: JSON.parse(text) };
+      if (PROFILE_OPS.test(m[1])) msg.vars = varsOf(url);
       if (m[1] === 'ListLatestTweetsTimeline') {
         try { msg.listId = JSON.parse(new URL(url, location.origin).searchParams.get('variables') || '{}').listId || null; } catch { msg.listId = null; }
       }
@@ -32,6 +40,10 @@
     } catch (e) {
       // 不是 JSON，忽略
     }
+  }
+
+  function varsOf(url) {
+    try { return JSON.parse(new URL(url, location.origin).searchParams.get('variables') || '{}'); } catch { return {}; }
   }
 
   // 记下页面自己用的应用令牌和 GraphQL 参数（queryId、features），后台读取关注列表时照着用。
@@ -82,7 +94,7 @@
         return key ? h[key] : null;
       });
       if (WATCH.test(url)) {
-        p.then((res) => res.clone().text().then((t) => forward(url, t))).catch(() => {});
+        p.then((res) => res.clone().text().then((t) => forward(url, t, res.status))).catch(() => {});
       }
     } catch (e) {
       // 旁听失败不能影响页面
@@ -111,8 +123,8 @@
     if (WATCH.test(this.__xaUrl || '')) {
       this.addEventListener('load', () => {
         try {
-          if (this.responseType === '' || this.responseType === 'text') forward(this.__xaUrl, this.responseText);
-          else if (this.responseType === 'json') forward(this.__xaUrl, JSON.stringify(this.response));
+          if (this.responseType === '' || this.responseType === 'text') forward(this.__xaUrl, this.responseText, this.status);
+          else if (this.responseType === 'json') forward(this.__xaUrl, JSON.stringify(this.response), this.status);
         } catch (e) {
           // 忽略
         }

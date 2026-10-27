@@ -176,6 +176,18 @@
     return (now || Date.now()) - u.activityAt > ACTIVITY_FRESH_DAYS * DAY_MS;
   }
 
+  // 你在首页、列表或别人主页上刷到某个关注对象的一条帖子（at 是发帖时间）：能不能据此更新 TA 的「最近发推」。
+  // 只会让人显得更活跃，不会反过来：一个月内发过的，直接算查过（两周内不用再开 TA 的主页）；
+  // 更早的帖子只在 TA 已经查过、而且比记录的更新时才更新，否则不知道 TA 之后有没有发过，不能拿来判断不活跃。
+  function seenPostPatch(u, at, now) {
+    const t = now || Date.now();
+    if (!u || !Number.isFinite(at) || at <= 0 || at > t + 3600000) return null;
+    if (u.activity === 'ok' && u.lastTweetAt >= at) return null;
+    if (t - at <= 30 * DAY_MS) return { activity: 'ok', lastTweetAt: at, activityAt: t, activityApprox: false };
+    if (u.activityAt && u.activity === 'ok') return { lastTweetAt: at, activityApprox: false };
+    return null;
+  }
+
   // 列表里显示的「最近发推」。
   function activityText(u, now) {
     if (!u) return '';
@@ -208,6 +220,6 @@
 
   root.XAStore = {
     LIMITS, DEFAULT_SETTINGS, SETTINGS_VERSION, normalizePace, mergeSettings, effectiveDailyCap, estimateFinish, dayKey, userKey, tagsFor, TAG_LABELS,
-    unfollowsNotApplied, INACTIVE_PERIODS, INACTIVE_LABELS, ACTIVITY_FRESH_DAYS, inactiveDays, needsActivityCheck, activityText,
+    unfollowsNotApplied, INACTIVE_PERIODS, INACTIVE_LABELS, ACTIVITY_FRESH_DAYS, inactiveDays, needsActivityCheck, activityText, seenPostPatch,
   };
 })(typeof globalThis !== 'undefined' ? globalThis : self);

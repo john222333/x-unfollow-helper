@@ -337,13 +337,22 @@ const errors = [];
   await opts.click('#tabs button[data-tab="users"]');
   // 前面测试勾选的标签筛选先去掉
   while (await opts.$('#tagFilters label.on')) await opts.click('#tagFilters label.on');
+  // 测试里把节奏调快（真实默认每个主页间隔十几秒）。
+  const swNow = context.serviceWorkers()[0] || sw;
+  await swNow.evaluate(() => { self.XAActivityPace = { gap: [300, 600], restEvery: [8, 8], restMs: [1500, 1500], loadWait: 8000 }; });
+  // 先刷一下首页：首页上 user5 五小时前发的帖子会被顺带记下，不用再开 TA 的主页。
+  const home5 = await context.newPage();
+  await home5.goto('https://x.com/home');
+  await until(async () => { const us = await get('users'); return us.user5 && us.user5.activity === 'ok'; }, 15000, '首页刷到的帖子记下发帖时间');
+  await home5.close();
   await opts.selectOption('#inactive', '6m');
   const hint = await until(async () => (await opts.isVisible('#inactiveBanner')) && await opts.textContent('#inactiveText'), 5000, '没检查过的提示');
   console.log('  ', hint);
   await opts.click('#activityBtn');
   const act = await until(async () => { const a = await get('activity'); return a && a.status !== 'running' ? a : null; }, 180000, '检查完成');
   const uAct = await get('users');
-  console.log('  结果', act.status, act.message, `检查 ${act.done} 人，请求 ${mock.state.calls.userTweets} 次`);
+  console.log('  结果', act.status, act.message, `检查 ${act.done} 人，主页时间线 ${mock.state.calls.profileTimelines} 次，插件直接调用被拒 ${mock.state.calls.userTweets404} 次`);
+  if (mock.state.calls.userTweets404) throw new Error('插件不应该自己调用推文接口');
   if (act.status !== 'done') throw new Error(`检查应该完成：${JSON.stringify(act)}`);
   const wl = (await get('whitelist')) || {};
   for (const u of Object.values(uAct)) {
@@ -352,6 +361,7 @@ const errors = [];
     if (u.tweets === 0) { if (u.activityAt) throw new Error('零推文的人不用查'); continue; }
     if (u.handle === 'user13') { if (u.activity !== 'unavailable') throw new Error('冻结的账号应该标成不可用'); continue; }
     const days = Math.floor((Date.now() - u.lastTweetAt) / 86400000);
+    if (u.handle === 'user5') { if (u.activity !== 'ok' || days !== 0) throw new Error('user5 应该按首页刷到的帖子算'); continue; }
     if (u.activity !== 'ok' || Math.abs(days - mock.lastDays(mu)) > 1) throw new Error(`@${u.handle} 最近发推应该是 ${mock.lastDays(mu)} 天前，实际 ${u.activity} ${days}`);
   }
   // 筛选「超过半年」：只有查过、而且确实超过 180 天的人（加上注册很久、从没发过推的人）。

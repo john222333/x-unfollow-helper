@@ -27,7 +27,7 @@ const state = {
   rateLimitOnce: false, // 下一次读取第二页时返回一次 429
   ignoreUnfollow: false, // 取关接口返回成功，但实际没有取关（模拟 X 悄悄不执行）
   partialPages: 0, // 接下来几次读取后续页时返回「部分出错」的空数据（模拟 X 中途超时）
-  calls: { destroy: 0, create: 0, following: 0, settings: 0, list: 0, userTweets: 0 },
+  calls: { destroy: 0, create: 0, following: 0, settings: 0, list: 0, userTweets: 0, userTweets404: 0, profileTimelines: 0 },
 };
 
 function reset() {
@@ -38,7 +38,7 @@ function reset() {
   state.rateLimitOnce = false;
   state.ignoreUnfollow = false;
   state.partialPages = 0;
-  state.calls = { destroy: 0, create: 0, following: 0, settings: 0, list: 0, userTweets: 0 };
+  state.calls = { destroy: 0, create: 0, following: 0, settings: 0, list: 0, userTweets: 0, userTweets404: 0, profileTimelines: 0 };
 }
 
 const followed = () => USERS.filter((u) => state.following.has(u.id));
@@ -65,6 +65,7 @@ const TWEETS = {
   home: [
     { id: '9001', handle: 'friend1', text: 'Anthropic Claude update ships agentic coding features for teams', url: 'https://www.anthropic.com/news/x', likes: 400, rts: 60, h: 4 },
     { id: '9002', handle: 'friend2', text: '今天天气不错，出去走走', url: '', likes: 10, rts: 0, h: 1 },
+    { id: '9003', handle: 'user5', uid: '1005', text: '周末去爬山了', url: '', likes: 3, rts: 0, h: 5 }, // 你关注的人：刷首页时顺带记下 TA 的发帖时间
   ],
 };
 
@@ -72,7 +73,7 @@ function gqlTweet(t) {
   return {
     __typename: 'Tweet',
     rest_id: t.id,
-    core: { user_results: { result: { __typename: 'User', rest_id: `u${t.id}`, core: { screen_name: t.handle, name: t.handle }, legacy: { followers_count: 50000 } } } },
+    core: { user_results: { result: { __typename: 'User', rest_id: t.uid || `u${t.id}`, core: { screen_name: t.handle, name: t.handle }, legacy: { followers_count: 50000 } } } },
     views: { count: String(t.likes * 40) },
     legacy: {
       full_text: t.text, created_at: twDate(t.h), lang: 'en', id_str: t.id,
@@ -183,13 +184,26 @@ function followingHtml() {
     });`);
 }
 
-function profileHtml(handle) {
+// 和真实主页一样：页面自己请求账号资料（UserByScreenName），账号正常再请求推文时间线。
+// 页面自己发的请求带着网页生成的校验头；插件直接调用推文接口会像真实情况一样被拒（404）。
+function profileData(handle, replies) {
+  const v = (o) => encodeURIComponent(JSON.stringify(o));
+  return `fetch('/i/api/graphql/ubs/UserByScreenName?variables=${v({ screen_name: handle })}', { headers: { 'x-client-transaction-id': 'page' } })
+    .then(r => r.json()).then(d => {
+      const u = d.data && d.data.user && d.data.user.result;
+      if (!u || u.__typename !== 'User') return;
+      const op = ${replies ? "'utr/UserTweetsAndReplies'" : "'ut/UserTweets'"};
+      fetch('/i/api/graphql/' + op + '?variables=' + encodeURIComponent(JSON.stringify({ userId: u.rest_id, count: 20 })), { headers: { 'x-client-transaction-id': 'page' } });
+    });`;
+}
+
+function profileHtml(handle, replies) {
   const u = USERS.find((x) => x.handle === handle);
-  if (!u) return page('<div data-testid="emptyState">This account doesn’t exist</div>');
+  if (!u) return page('<div data-testid="emptyState">This account doesn’t exist</div>', profileData(handle, replies));
   const limited = handle === 'user29';
   const on = state.following.has(u.id);
   return page(`<div data-testid="placementTracking"><button id="fb" data-testid="${u.id}-${on ? 'unfollow' : 'follow'}">${on ? 'Following' : 'Follow'}</button></div>
-    <div data-testid="UserName">${u.name}</div>`, `
+    <div data-testid="UserName">${u.name}</div>`, `${profileData(handle, replies)}
     const b = document.getElementById('fb');
     const set = (v) => fetch('/__mock/follow?id=${u.id}&on=' + v).then(() => {
       b.dataset.testid = '${u.id}-' + (v ? 'unfollow' : 'follow'); b.textContent = v ? 'Following' : 'Follow';
@@ -250,11 +264,19 @@ async function apiRoute(r, url, p) {
     const m = /^\/i\/api\/graphql\/([\w-]+)\/(\w+)$/.exec(p);
     if (m && m[1] === 'home' && m[2] === 'HomeTimeline') return json(r, 200, timeline(TWEETS.home));
     if (m && m[1] === 'side' && m[2] === 'ExploreSidebar') return json(r, 200, exploreSidebar());
-    if (m && m[1] === 'utr' && m[2] === 'UserTweetsAndReplies') {
+    if (m && m[1] === 'ubs' && m[2] === 'UserByScreenName') {
+      const { screen_name: sn } = JSON.parse(url.searchParams.get('variables') || '{}');
+      const u = USERS.find((x) => x.handle === sn);
+      if (!u || u.handle === 'user13') return json(r, 200, { data: { user: u ? { result: { __typename: 'UserUnavailable', reason: 'Suspended' } } : {} } });
+      return json(r, 200, { data: { user: { result: gqlUser(u) } } });
+    }
+    if (m && (m[1] === 'utr' || m[1] === 'ut') && /^UserTweets/.test(m[2])) {
       state.calls.userTweets++;
-      if (!url.searchParams.get('features')) return json(r, 400, { errors: [{ message: 'features cannot be null' }] });
+      // 真实的 X 要求推文接口带网页自己生成的 x-client-transaction-id，没有就返回 404。
+      if (!h['x-client-transaction-id']) { state.calls.userTweets404++; return r.fulfill({ status: 404, body: '' }); }
       const { userId } = JSON.parse(url.searchParams.get('variables') || '{}');
-      return json(r, 200, userTweets(String(userId)), { 'x-rate-limit-limit': '500', 'x-rate-limit-remaining': '400', 'x-rate-limit-reset': String(Math.floor(Date.now() / 1000) + 20) });
+      state.calls.profileTimelines++;
+      return json(r, 200, userTweets(String(userId)));
     }
     if (m && m[1] === 'lst' && m[2] === 'ListLatestTweetsTimeline') {
       state.calls.list++;
@@ -315,6 +337,8 @@ async function route(r) {
   if (p === '/home' || p === '/') return html(homeHtml());
   if (p === '/intent/post') return html(page('<div data-testid="tweetTextarea_0">发推框</div>'));
   if (p === `/${ME.handle}/following`) return html(followingHtml());
+  const wr = /^\/([A-Za-z0-9_]+)\/with_replies\/?$/.exec(p);
+  if (wr) return html(profileHtml(wr[1], true));
   const m = /^\/([A-Za-z0-9_]+)\/?$/.exec(p);
   if (m) return html(profileHtml(m[1]));
   return r.fulfill({ status: 404, body: '' });

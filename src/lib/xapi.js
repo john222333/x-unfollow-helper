@@ -89,19 +89,6 @@
     return { method: 'GET', path: `/i/api/graphql/${op.qid}/ListLatestTweetsTimeline`, query };
   }
 
-  // 某个人的推文时间线（检查多久没发推）。UserTweetsAndReplies 连回复一起算，找不到时用 UserTweets。
-  function userTweetsRequest(op, userId, seenFeatures) {
-    const variables = { userId: String(userId), count: 20, includePromotedContent: false, withVoice: true };
-    if (op.name === 'UserTweetsAndReplies') variables.withCommunity = true;
-    else variables.withQuickPromoteEligibilityTweetFields = false;
-    const query = {
-      variables: JSON.stringify(variables),
-      features: JSON.stringify(buildFeatures(op.featureNames, { ...(seenFeatures || {}), ...(op.features || {}) })),
-    };
-    if (op.fieldToggles) query.fieldToggles = JSON.stringify(op.fieldToggles);
-    return { method: 'GET', path: `/i/api/graphql/${op.qid}/${op.name || 'UserTweets'}`, query };
-  }
-
   // 从 X 的前端代码里找某个 GraphQL 操作的 queryId 和需要的 features 名单。
   function findOperation(jsText, name) {
     const re = new RegExp(`queryId:"([\\w-]+)",operationName:"${name}",operationType:"\\w+",metadata:\\{featureSwitches:\\[([^\\]]*)\\],fieldToggles:\\[([^\\]]*)\\]`);
@@ -309,6 +296,33 @@
     return count ? { state: 'ok', lastAt, count } : { state: 'empty', lastAt: 0, count: 0 };
   }
 
+  // 时间线里每个作者最近一次发帖的时间（转推按转推的时间算，算在转推的人头上）。{ 账号 ID: 毫秒时间戳 }
+  function postTimes(data) {
+    const out = {};
+    (function walk(o, depth) {
+      if (!o || typeof o !== 'object' || depth > 60) return;
+      if (Array.isArray(o)) { for (const x of o) walk(x, depth + 1); return; }
+      if (o.tweet_results && o.tweet_results.result) {
+        let t = o.tweet_results.result;
+        if (t.__typename === 'TweetWithVisibilityResults') t = t.tweet;
+        const ur = t && t.core && t.core.user_results && t.core.user_results.result;
+        const author = (ur && ur.rest_id) || (t && t.legacy && t.legacy.user_id_str);
+        const at = t && t.legacy ? Date.parse(t.legacy.created_at) : NaN;
+        if (author && Number.isFinite(at) && !(out[author] >= at)) out[String(author)] = at;
+        return;
+      }
+      for (const k of Object.keys(o)) walk(o[k], depth + 1);
+    })(data, 0);
+    return out;
+  }
+
+  // 打开某人主页时页面自己加载的账号资料（UserByScreenName）：账号还在不在。
+  function profileUser(data) {
+    const r = data && data.data && data.data.user && data.data.user.result;
+    if (!r || /Unavailable|Suspended/.test(r.__typename || '')) return { unavailable: true, userId: null };
+    return { unavailable: false, userId: r.rest_id ? String(r.rest_id) : null };
+  }
+
   // ---------- 结果判断 ----------
 
   function errorsOf(r) {
@@ -350,6 +364,6 @@
   root.XAPI = {
     WEB_BEARER, DEFAULT_FEATURES, friendshipRequest, settingsRequest, followingRequest, buildFeatures, findOperation, hasTimeline,
     fromGraphQLUser, parseGraphQLUsers, bottomCursor, classifyFriendship, apiUnavailable,
-    listTweetsRequest, fromGraphQLTweet, parseTweets, parseTrends, userTweetsRequest, lastActivity,
+    listTweetsRequest, fromGraphQLTweet, parseTweets, parseTrends, lastActivity, postTimes, profileUser,
   };
 })(typeof globalThis !== 'undefined' ? globalThis : self);

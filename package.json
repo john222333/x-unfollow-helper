@@ -1,6 +1,6 @@
 {
   "name": "x-unfollow-helper",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "private": true,
   "description": "Chrome extension: read, filter and slowly unfollow accounts on x.com in the background; AI and Web3 trending topics with tweet drafts",
   "license": "MIT",
