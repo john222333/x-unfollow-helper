@@ -141,6 +141,14 @@ const errors = [];
   if (dryLog.length !== 3 || dryLog.some((l) => l.result !== 'dry_run')) throw new Error('演练结果不对');
   if ((await get('queue')).length !== 3) throw new Error('演练不应该改动队列');
   if (mock.state.calls.destroy) throw new Error('演练不应该调用取关接口');
+  // 已经在取关队列里的人不在筛选结果里显示，取消勾选「隐藏已在取关队列的」又会出现
+  await opts.click('#tabs button[data-tab="users"]');
+  const qs = await until(async () => { const t = await opts.textContent('#userSummary'); return /3 人已在取关队列/.test(t) ? t : null; }, 5000, '隐藏队列里的人');
+  console.log('  ', qs);
+  if (!qs.includes('筛选出 16 人')) throw new Error('队列里的人应该被隐藏'); // 20 个不回关，减去白名单里的 user5 和队列里的 3 人
+  await opts.uncheck('#hideQueued');
+  if (!(await opts.textContent('#userSummary')).includes('筛选出 19 人')) throw new Error('取消隐藏后应该重新显示');
+  await opts.check('#hideQueued');
 
   // 4. 后台分批取关：user1、user2 成功，user29 被 X 拒绝（限额）后熔断
   console.log('▶ 后台分批取关');

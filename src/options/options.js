@@ -178,6 +178,11 @@
     renderUsers();
   });
 
+  // 取关队列里的人（正在处理的这一批也还在队列里）。
+  function queuedKeys() {
+    return new Set(data.queue.filter((q) => q.action !== 'follow').map((q) => q.key));
+  }
+
   function filteredUsers() {
     const few = Number($('fewN').value);
     const q = $('q').value.trim().toLowerCase();
@@ -185,6 +190,10 @@
     const hideWl = $('hideWl').checked;
     let list = Object.values(data.users).map((u) => ({ ...u, tags: S.tagsFor(u, { fewFollowers: few }) }));
     if (hideWl) list = list.filter((u) => !data.whitelist[u.key]);
+    if ($('hideQueued').checked) {
+      const queued = queuedKeys();
+      list = list.filter((u) => !queued.has(u.key));
+    }
     if (q) list = list.filter((u) => `${u.name || ''} ${u.handle} ${u.bio || ''}`.toLowerCase().includes(q));
     if (tagOn.size) list = list.filter((u) => [...tagOn].every((t) => u.tags.includes(t)));
     if (kws.length) list = list.filter((u) => kws.some((k) => `${u.name || ''} ${u.bio || ''}`.toLowerCase().includes(k)));
@@ -207,11 +216,16 @@
   function renderUsers() {
     const list = filteredUsers();
     const total = Object.keys(data.users).length;
+    // 已经进了队列、被隐藏的人不再算在「已选」里。
+    const queued = queuedKeys();
+    const hidQueued = $('hideQueued').checked;
+    if (hidQueued) for (const k of [...selected]) if (queued.has(k)) selected.delete(k);
+    const inQueue = Object.keys(data.users).filter((k) => queued.has(k)).length;
     const pages = Math.max(1, Math.ceil(list.length / PAGE));
     if (page >= pages) page = pages - 1;
     const slice = list.slice(page * PAGE, page * PAGE + PAGE);
     $('userSummary').textContent = total
-      ? `共 ${total} 人，筛选出 ${list.length} 人，已选 ${selected.size} 人`
+      ? `共 ${total} 人，筛选出 ${list.length} 人，已选 ${selected.size} 人${hidQueued && inQueue ? `（${inQueue} 人已在取关队列，不再列出）` : ''}`
       : '还没有数据，先点「读取关注列表」';
     $('onboard').hidden = total > 0;
     // 日志里显示取关成功、重新读取时 X 上却还在关注的人。
@@ -241,7 +255,7 @@
   }
 
   ['q', 'fewN', 'kw'].forEach((id) => $(id).addEventListener('input', () => { page = 0; renderUsers(); }));
-  ['hideWl', 'sort', 'inactive'].forEach((id) => $(id).addEventListener('change', () => { page = 0; renderUsers(); }));
+  ['hideWl', 'hideQueued', 'sort', 'inactive'].forEach((id) => $(id).addEventListener('change', () => { page = 0; renderUsers(); }));
   $('prevPage').onclick = () => { if (page > 0) { page--; renderUsers(); } };
   $('nextPage').onclick = () => { page++; renderUsers(); };
 
